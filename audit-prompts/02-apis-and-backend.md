@@ -15,7 +15,7 @@ For each item, tell me pass or fail with a specific example.
 5. Responses return only needed fields: no secrets, password hashes, or other tenants' data.
 6. No slow endpoints: pagination, no over-fetching, no N+1 queries.
 7. (Added) Every route and server action is in `API.md`, and there are no orphan test routes or debug endpoints.
-8. (Added) All inference goes through `lib/ai/inference.ts`; model IDs only from `lib/ai/models.ts`; methodology prompt loaded from `methodology_prompts`, never hardcoded; no silent cloud LLM fallback; SLM output is schema-validated before use.
+8. (Added) Routes call inference only through `lib/ai/inference.ts` (internals are audited in `14-inference-and-methodology.md`); SLM output is never passed to queries or the DOM unchecked.
 9. (Added) Audit events written explicitly per `CLAUDE.md` (auth, sensitive reads, writes, exports, generation events) with ids only, no PHI content.
 
 Give me an overall score out of 9 and list the top 3 things to fix first.

@@ -278,8 +278,8 @@ To be filled when the app is scaffolded (install, dev, lint, typecheck, test, bu
 
 - `ORCHESTRATION.md`: how work is done (branches, plan mode, two-pass UI, stop-and-ask triggers).
 - `PROGRESS.md`: source of truth for state, decisions, open questions, pre-launch checklist.
-- `audit-prompts/`: 13 pass/fail checklists that define done per domain.
-- `.claude/agents/`: six builder agents plus `supervising-agent.md`.
+- `audit-prompts/`: 14 pass/fail checklists that define done per domain.
+- `.claude/agents/`: seven builder agents plus `supervising-agent.md`.
 - `design/` and `DESIGN.md`: design system (not yet chosen; see PROGRESS.md).
 - `API.md`: inventory of every endpoint and server action.
 - `docs/RUNBOOK.md`: failure scenarios, rollback, backup drills.

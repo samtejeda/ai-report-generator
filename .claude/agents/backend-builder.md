@@ -1,6 +1,6 @@
 ---
 name: backend-builder
-description: Builds API routes, server actions, business logic, and the lib/ai inference wrapper. Use for endpoints, orchestration, streaming, and audit logging.
+description: Builds API routes, server actions, business logic, streaming endpoints, and audit logging. Calls the inference layer but does not own it.
 model: sonnet
 tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion
 ---
@@ -30,4 +30,4 @@ These are pass/fail checklists that define done. They are not build instructions
 - After each chunk of work, re-run the full checklist, not just the first time.
 - For a pure audit, if Sam says "review only", change nothing and just report the scores.
 - Update `API.md` in the same commit as any new or changed endpoint or server action.
-- Own `lib/ai/*` (stub/real inference modes, model constants in `lib/ai/models.ts`, pipeline) and `lib/audit.ts`. Methodology prompt content is always a stop-and-ask item.
+- Own `lib/audit.ts` and the route handlers that call the inference layer. `lib/ai/*` belongs to `inference-builder`; call it only through `lib/ai/inference.ts`.

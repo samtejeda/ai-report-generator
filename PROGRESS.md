@@ -20,9 +20,9 @@ Source of truth for project state. Update after every commit or milestone. Conve
 
 ## Decisions & assumptions
 
-- Decided (Sam, 2026-10-08): adopt the multi-agent build workflow (supervisor + six builders + 13 audit checklists). Reason: most valuable pieces land first; pass/fail definition of done per domain.
+- Decided (Sam, 2026-10-08): adopt the multi-agent build workflow (supervisor + builders + audit checklists; now seven builders and 14 checklists, see below). Reason: most valuable pieces land first; pass/fail definition of done per domain.
 - Assumed (Claude, 2026-10-08, **unconfirmed**): the "stop and ask" trigger list in ORCHESTRATION.md was proposed from the domain; Sam to confirm or edit.
-- Assumed (Claude, 2026-10-08, **unconfirmed**): no inference-specific builder agent; `backend-builder` owns `lib/ai/*`.
+- Decided (Sam, 2026-10-08): add `inference-builder` (owns `lib/ai/*`) with its own checklist `audit-prompts/14-inference-and-methodology.md`. Replaces the earlier assumption that `backend-builder` would own it.
 - Assumed (Claude, 2026-10-08, **unconfirmed**): the repo is created without any commit on `main`; the first branch is `chore/workflow-scaffold`. `main` will be created from it on merge.
 - Assumed (Claude, 2026-10-08, **unconfirmed**): `.github/workflows/ci.yml` is deferred until the app stack exists.
 

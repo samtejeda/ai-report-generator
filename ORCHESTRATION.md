@@ -62,4 +62,4 @@ Build the next item from `PROGRESS.md` "Next up" -> re-read the owned audit-prom
 
 ## Note on AI/inference work
 
-No dedicated inference agent exists. `backend-builder` owns `lib/ai/*` (stub mode, pipeline, models.ts) and the methodology prompt loader; methodology prompt *content* is always a stop-and-ask item for the practice owner's input. If the pipeline and RAG work becomes a discipline of its own, split an `inference-builder` agent out of `backend-builder`.
+`inference-builder` owns `lib/ai/*` (stub/real modes, models.ts, pipeline, RAG retrieval, methodology prompt loader) and is audited by `audit-prompts/14-inference-and-methodology.md`. `backend-builder` owns the route handlers that call it, only through `lib/ai/inference.ts`; `database-builder` owns the schema. Methodology prompt *content* is always a stop-and-ask item for the practice owner's input.
