@@ -33,7 +33,7 @@ Source of truth for project state. Update after every commit or milestone. Conve
   - Supabase: BAA requires **Team** ($599/mo) or Enterprise plus the paid HIPAA add-on (about $350/mo per secondary sources; not officially published). Customer must also enforce MFA, PITR, SSL enforcement, network restrictions.
   - Vercel: BAA on Pro as a paid add-on (about $350/mo, click-through, unsigned) or a signed BAA on Enterprise. `CLAUDE.md` says Enterprise required; Pro + add-on may suffice if the lawyer accepts a click-through BAA.
   - Rough Phase C database cost: Neon Scale (usage-based) vs Supabase about $950+/mo.
-- Decision pending (Sam): stay on Neon or switch to Supabase. Claude's recommendation: stay on Neon; revisit only if bundled Supabase Auth/RLS is wanted.
+- Decided (Sam, 2026-10-08): stay on Neon (not Supabase). Reason: cheaper HIPAA path (Scale plan vs Supabase Team + add-on) and we don't need Supabase's bundled extras. Next steps: auth provider still open (NextAuth vs Clerk); confirm Neon Scale/BAA terms with Neon before Phase C.
 
 ## Open questions for Sam
 
