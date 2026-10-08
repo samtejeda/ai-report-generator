@@ -226,6 +226,64 @@ Application-level, written explicitly by route handlers. Not an ORM hook or DB t
 5. **Weeks 9–10:** Polish, add Tailscale tunnel for cloud→local path, deploy cloud to Vercel/Neon (standard tier, synthetic data only). Practice owner uses it for real work with synthetic cases.
 6. **Later (Phase C):** BAA tier upgrades, lawyer review of contracts, then real client data.
 
+## Roles and authorization
+
+Roles (on `users`): **owner** (practice owner, full access in their organization), **associate** (psychologist, access to assigned clients/reports), **admin** (staff, practice administration, no clinical content unless granted). Exact permission matrix is a Plan Mode item before auth is built.
+
+**All permission checks happen server-side only.** The frontend hides things for UX; it never enforces anything.
+
+**Authorization chain (layered gates):**
+1. Edge/proxy check (Next.js `proxy`/middleware): redirects unauthenticated users. Convenience only, never the sole gate.
+2. Layout-level check: server layout resolves the session and organization; renders nothing for the wrong role.
+3. Every page, server action, and route handler re-checks session, role, and organization itself.
+4. Data functions enforce ownership inside the query: every query on a multi-tenant table filters by `organization_id` (query-level guard), and by client/report assignment where roles require it.
+
+## API security rules
+
+- Never trust the frontend: re-validate identity, role, organization, and input on the server for every request.
+- Broken access control is the top risk: test that user A in org 1 cannot read or write org 2's rows, and that an associate cannot reach clients they aren't assigned.
+- Validate the whole business flow, not just single fields (for example, a report can only be finalized from `generated` status).
+- Validate responses from external APIs and from the SLM (parse the JSON output against a schema; never pass model output into queries or the DOM unchecked).
+- Rate-limit auth endpoints and generation endpoints.
+- Server-side input validation (schema validation on every handler).
+- Return minimal response data: no password hashes, internal ids you don't need, other tenants' fields.
+- SSRF prevention: `inference_endpoint` is set by an admin action only, validated against an allow-list pattern (Tailscale/Cloudflare tunnel hosts), never taken from request input.
+- Every route and server action is documented in `API.md`; no orphan test routes.
+- No debug mode, default credentials, or verbose error bodies in production.
+
+## Project structure (planned; scaffold not yet created)
+
+```
+app/                 Next.js App Router (server components by default)
+lib/ai/              models.ts (model IDs), inference.ts (stub/real modes), pipeline, prompts loader
+lib/db/              Drizzle schema, migrations, tenant-scoped query helpers
+lib/audit.ts         explicit audit log helper
+lib/auth/            session, role checks
+components/          UI (shadcn/ui based), one component per file
+drizzle/             committed migrations
+```
+
+## Dev commands
+
+To be filled when the app is scaffolded (install, dev, lint, typecheck, test, build, `drizzle-kit generate` / `migrate`, Ollama start). Record the real commands here in the same PR that adds them.
+
+## CI and deploy
+
+- CI runs on every PR: lint, typecheck, tests, Drizzle migration check, build.
+- `main` is branch-protected on the checks job; merging to `main` deploys to Vercel.
+- Migrations are forward-only and backward-compatible with the previous deploy. Rollback reverts code, not schema.
+- Standard Vercel/Neon tiers with synthetic data only until Phase C BAA upgrades are done.
+
+## Working method and project docs
+
+- `ORCHESTRATION.md`: how work is done (branches, plan mode, two-pass UI, stop-and-ask triggers).
+- `PROGRESS.md`: source of truth for state, decisions, open questions, pre-launch checklist.
+- `audit-prompts/`: 13 pass/fail checklists that define done per domain.
+- `.claude/agents/`: six builder agents plus `supervising-agent.md`.
+- `design/` and `DESIGN.md`: design system (not yet chosen; see PROGRESS.md).
+- `API.md`: inventory of every endpoint and server action.
+- `docs/RUNBOOK.md`: failure scenarios, rollback, backup drills.
+
 ## Conventions
 
 - **Naming:** snake_case in DB columns, camelCase in TS. Drizzle handles the mapping.
