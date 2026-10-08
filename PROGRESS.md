@@ -35,6 +35,8 @@ Source of truth for project state. Update after every commit or milestone. Conve
   - Rough Phase C database cost: Neon Scale (usage-based) vs Supabase about $950+/mo.
 - Decided (Sam, 2026-10-08): stay on Neon (not Supabase). Reason: cheaper HIPAA path (Scale plan vs Supabase Team + add-on) and we don't need Supabase's bundled extras. Next steps: auth provider still open (NextAuth vs Clerk); confirm Neon Scale/BAA terms with Neon before Phase C.
 
+- Decided (Sam, 2026-10-08): repo name `ai-report-generator` (private). Neon dev project lives on Sam's personal account (`ai-report-generator-dev`, synthetic data only); the production project is created fresh under a company Neon organization when billing starts (migrations rebuild the schema; only `DATABASE_URL` changes). Do not enable the Neon Vercel/GitHub integrations, since integrated projects can't be transferred; use a plain env var. Source: neon.com/docs/manage/orgs-project-transfer (unverified beyond search).
+
 ## Open questions for Sam
 
 - Confirm or edit the stop-and-ask trigger list (ORCHESTRATION.md).
@@ -47,7 +49,8 @@ Source of truth for project state. Update after every commit or milestone. Conve
 
 Single home for anything gated on a later condition. Do not bury these in dated logs.
 
-- [ ] BAA signed with Neon (Business tier) before any real client data.
+- [ ] Company Neon organization created; production project created there on the Scale plan (not a transfer of the dev project).
+- [ ] BAA signed with Neon (Scale plan; `CLAUDE.md` says "Business", likely stale) before any real client data.
 - [ ] BAA signed with Vercel (Enterprise tier) before any real client data.
 - [ ] Any other vendor touching PHI identified and under BAA (Resend content policy: no PHI in emails).
 - [ ] Healthcare-privacy lawyer reviews first client contract and BAA.
