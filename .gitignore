@@ -19,3 +19,4 @@ next-env.d.ts
 .vercel/
 coverage/
 *.tsbuildinfo
+.neon
