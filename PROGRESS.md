@@ -26,6 +26,15 @@ Source of truth for project state. Update after every commit or milestone. Conve
 - Assumed (Claude, 2026-10-08, **unconfirmed**): the repo is created without any commit on `main`; the first branch is `chore/workflow-scaffold`. `main` will be created from it on merge.
 - Assumed (Claude, 2026-10-08, **unconfirmed**): `.github/workflows/ci.yml` is deferred until the app stack exists.
 
+### Findings
+
+- Finding (Claude, 2026-10-08): Neon vs Supabase HIPAA/BAA comparison. Web search only; vendor pages not fetched, so figures are **unverified** until confirmed with each vendor.
+  - Neon: HIPAA is self-serve on the **Scale** plan with an accepted BAA; no extra charge now, a 15% invoice surcharge is planned with advance notice (neon.com/docs/security/hipaa). `CLAUDE.md` says "Business tier"; likely stale naming.
+  - Supabase: BAA requires **Team** ($599/mo) or Enterprise plus the paid HIPAA add-on (about $350/mo per secondary sources; not officially published). Customer must also enforce MFA, PITR, SSL enforcement, network restrictions.
+  - Vercel: BAA on Pro as a paid add-on (about $350/mo, click-through, unsigned) or a signed BAA on Enterprise. `CLAUDE.md` says Enterprise required; Pro + add-on may suffice if the lawyer accepts a click-through BAA.
+  - Rough Phase C database cost: Neon Scale (usage-based) vs Supabase about $950+/mo.
+- Decision pending (Sam): stay on Neon or switch to Supabase. Claude's recommendation: stay on Neon; revisit only if bundled Supabase Auth/RLS is wanted.
+
 ## Open questions for Sam
 
 - Confirm or edit the stop-and-ask trigger list (ORCHESTRATION.md).
