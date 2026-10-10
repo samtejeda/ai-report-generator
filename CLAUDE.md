@@ -265,7 +265,16 @@ drizzle/             committed migrations
 
 ## Dev commands
 
-To be filled when the app is scaffolded (install, dev, lint, typecheck, test, build, `drizzle-kit generate` / `migrate`, Ollama start). Record the real commands here in the same PR that adds them.
+Node >= 20.9 (developed on Node 24), npm.
+
+- `npm run dev`: dev server on localhost:3000 (Turbopack).
+- `npm run lint` / `npm run typecheck` / `npm test`: ESLint, `next typegen && tsc --noEmit`, Vitest (`npm run test:watch` to watch).
+- `npm run build` / `npm start`: production build and server.
+- Environment: copy `.env.example` to `.env.local` (or run `neon link` against the dev branch). `lib/env.ts` validates it at server start and fails with the variable name, never the value.
+- Ollama (host, not Docker): `brew services start ollama`, model `qwen3:1.7b` for the dev stub.
+- Database commands (Drizzle `generate` / `migrate` / `check`) are added with the Drizzle PR.
+
+**Next.js 16 notes:** `AGENTS.md` (written by Next) says this version differs from older training data; read `node_modules/next/dist/docs/` before writing framework code. Cache Components is on, so caching is opt-in via `use cache`. Never use `use cache` on tenant-scoped or PHI data.
 
 ## CI and deploy
 
