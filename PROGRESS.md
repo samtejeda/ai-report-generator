@@ -5,18 +5,18 @@ Source of truth for project state. Update after every commit or milestone. Conve
 ## Done
 
 - 2026-10-08: Repo initialized (`git init`) on `chore/workflow-scaffold`; baseline `CLAUDE.md` committed.
+- 2026-10-09: Scaffold bootstrapped to `main` (`63a3c26`) by Sam's approval; GitHub repo `samtejeda/ai-report-generator` created. Branch protection on `main` enabled (PR required, 0 approvals, admins enforced, no force-push or deletion; no required status checks until CI exists). Ollama 0.40.2 installed via Homebrew (service on `localhost:11434`), `qwen3:1.7b` pulled and answering (one-shot test). Neon dev branch linked.
 - 2026-10-08: Workflow scaffold written (ORCHESTRATION.md, PROGRESS.md, API.md, audit-prompts/, .claude/agents/, docs/RUNBOOK.md stub, DESIGN.md placeholder). Awaiting Sam's review.
 
 ## In progress
 
-- `chore/workflow-scaffold`: pending Sam's review and merge.
+- Phase A app scaffold: planning (Plan Mode), not started.
 
 ## Next up
 
-1. Create the `main` branch on the remote and set branch protection (see Blocked on Sam). Merge the scaffold PR.
-2. Plan Mode: Phase A scaffold (Next.js 16 + Tailwind + shadcn/ui + Drizzle + Neon), then data model migrations. Sam picks which to plan first.
-3. Add `.github/workflows/ci.yml` in the same PR that adds the app's lint/typecheck/test/build scripts.
-4. Choose design reference(s) and vet the `getdesign` package (see Open questions).
+1. Plan Mode: Phase A scaffold (Next.js 16 + Tailwind + shadcn/ui + Drizzle + Neon), then data model migrations. Sam picks which to plan first.
+2. Add `.github/workflows/ci.yml` (then add the checks job as a required status check on `main`) in the same PR that adds the app's lint/typecheck/test/build scripts.
+3. Decide auth provider in the plan: Neon Auth (Better Auth, data in `neon_auth` schema) vs Auth.js; confirm Neon BAA coverage and role fit first. Clerk is out.
 
 ## Decisions & assumptions
 
@@ -39,11 +39,14 @@ Source of truth for project state. Update after every commit or milestone. Conve
 
 - Done (2026-10-08): Neon CLI 8.1.0 installed globally and logged in (keyring). Folder linked to project `delicate-boat-70144866`, branch `dev` (not `production`) via `.neon` (gitignored); `neon link` wrote the pooled `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, and `NEON_BRANCH` into `.env.local` (verified shape only, values not read). Declined: `neon skills`, `neon mcp`, `neon config init`/`neon.ts`/`neon deploy`. Sam also asked to consider Neon's new backend offering (storage, functions, AI gateway) later; not adopted.
 
+- Decided (Sam, 2026-10-09): the GitHub repo is **public** (free branch protection). Consequence rule: the repo must never contain methodology prompt text, example/hand-written reports from the practice owner, or any client-derived data. Those live in the database and local files only. Code, docs, and synthetic fixtures are fine. Cost accepted: product/strategy text in `CLAUDE.md` is public.
+- Decided (Sam, 2026-10-09): design brand is not a concern now; `DESIGN.md` stays a placeholder until the restyle pass.
+
 ## Open questions for Sam
 
 - Confirm or edit the stop-and-ask trigger list (ORCHESTRATION.md).
-- Which getdesign.md brand for `DESIGN.md`, and is a secondary reference wanted for data-dense screens (report editor, score tables)? Until answered, `DESIGN.md` is a placeholder.
-- Remote: GitHub repo name/visibility, and is `gh` authenticated? (**unverified**; not checked.)
+- ~~Which getdesign.md brand for `DESIGN.md`~~ Deferred 2026-10-09 (see Decisions).
+- ~~Remote: GitHub repo name/visibility~~ Resolved 2026-10-09: public repo `samtejeda/ai-report-generator`.
 - Roles/permission matrix (owner / associate / admin): confirm before auth planning.
 - Existing deferred questions in `CLAUDE.md` ("Open questions / decisions deferred") still apply.
 
@@ -68,6 +71,4 @@ Single home for anything gated on a later condition. Do not bury these in dated 
 
 ## Blocked on Sam
 
-- Review/merge of `chore/workflow-scaffold`.
-- Decision on GitHub remote and branch protection for `main`.
-- Design reference choice.
+- Nothing at the moment.
