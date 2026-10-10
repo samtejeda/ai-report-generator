@@ -20,3 +20,10 @@ next-env.d.ts
 coverage/
 *.tsbuildinfo
 .neon
+
+# package manager / build leftovers
+/.pnp
+.pnp.*
+.yarn/*
+/build
+npm-debug.log*
