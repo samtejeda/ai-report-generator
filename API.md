@@ -18,7 +18,7 @@ Inventory of every endpoint and server action. Updated in the same commit as any
 
 | Method | Path | Auth / roles | Purpose | Audit event | Rate limit |
 |---|---|---|---|---|---|
-| _none yet_ | | | | | |
+| GET | `/api/health` | Public (intentionally; no tenant data) | Liveness plus database reachability (`select 1`). Returns `{status:"ok"}` or 503 `{status:"unavailable"}`; no versions, hosts, or error text. | None (health noise excluded) | None yet (resilience-builder to add a coarse limit) |
 
 ## Server actions
 

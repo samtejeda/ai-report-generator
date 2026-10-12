@@ -272,7 +272,7 @@ Node >= 20.9 (developed on Node 24), npm.
 - `npm run build` / `npm start`: production build and server.
 - Environment: copy `.env.example` to `.env.local` (or run `neon link` against the dev branch). `lib/env.ts` validates it at server start and fails with the variable name, never the value.
 - Ollama (host, not Docker): `brew services start ollama`, model `qwen3:1.7b` for the dev stub.
-- Database commands (Drizzle `generate` / `migrate` / `check`) are added with the Drizzle PR.
+- Database: `npm run db:generate` (new migration from schema changes; `npx drizzle-kit generate --custom --name=<slug>` for hand-written SQL), `npm run db:migrate` (applies to the database in `DATABASE_URL_UNPOOLED`; currently the Neon `dev` branch), `npm run db:check` (migration consistency, no DB connection). Commit the generated files in `drizzle/`.
 
 **Next.js 16 notes:** `AGENTS.md` (written by Next) says this version differs from older training data; read `node_modules/next/dist/docs/` before writing framework code. Cache Components is on, so caching is opt-in via `use cache`. Never use `use cache` on tenant-scoped or PHI data.
 
