@@ -5,12 +5,14 @@ Source of truth for project state. Update after every commit or milestone. Conve
 ## Done
 
 - 2026-10-08: Repo initialized (`git init`) on `chore/workflow-scaffold`; baseline `CLAUDE.md` committed.
+- 2026-10-12: PRs #1 and #2 merged. PR #2 = Next.js 16.4 app, Tailwind + shadcn defaults, zod env validation at startup (4 tests), Vitest, security headers, `private, no-store` default for dynamic routes.
+- 2026-10-12: `feat/drizzle-neon`: Drizzle (neon-serverless WebSocket pool on the pooled URL; drizzle-kit on the unpooled URL), migration `0000_enable_pgvector` applied to Neon `dev` (verified: `vector` 0.8.6 installed, 1 migration recorded), `GET /api/health` (200 ok with real DB; 503 with a broken URL; neither log nor response leaks credentials or host). `channel_binding=require` caused no problems.
 - 2026-10-09: Scaffold bootstrapped to `main` (`63a3c26`) by Sam's approval; GitHub repo `samtejeda/ai-report-generator` created. Branch protection on `main` enabled (PR required, 0 approvals, admins enforced, no force-push or deletion; no required status checks until CI exists). Ollama 0.40.2 installed via Homebrew (service on `localhost:11434`), `qwen3:1.7b` pulled and answering (one-shot test). Neon dev branch linked.
 - 2026-10-08: Workflow scaffold written (ORCHESTRATION.md, PROGRESS.md, API.md, audit-prompts/, .claude/agents/, docs/RUNBOOK.md stub, DESIGN.md placeholder). Awaiting Sam's review.
 
 ## In progress
 
-- Phase A app scaffold: planning (Plan Mode), not started.
+- Phase A app scaffold, PR 2 of 3 (`feat/drizzle-neon`): open for review. PR 3 (`feat/ci`) next.
 
 ## Next up
 
@@ -49,6 +51,17 @@ Source of truth for project state. Update after every commit or milestone. Conve
 - ~~Remote: GitHub repo name/visibility~~ Resolved 2026-10-09: public repo `samtejeda/ai-report-generator`.
 - Roles/permission matrix (owner / associate / admin): confirm before auth planning.
 - Existing deferred questions in `CLAUDE.md` ("Open questions / decisions deferred") still apply.
+
+### Audit self-checks (Claude, 2026-10-12; files re-read from disk; partial/unverified is not pass)
+
+- 05 database-and-storage (this PR): 1 pass (item 8: versioned migration, pooled URL in app code, unpooled only in drizzle config). Items 1-5 and 7 not yet applicable (no tables; arrive with the data-model plan). Item 6 **unverified**: Neon backups/PITR not confirmed on the free dev project, no restore drilled. Score 1/8 pass, 6 pending, 1 unverified. Top fixes: data-model migrations (1-4, 7); confirm Neon restore window and drill one restore (6).
+- 02 apis-and-backend (this PR): items 1, 2, 5, 7 pass for the single route (`/api/health`: consistent path, 503 without internals, minimal body, listed in API.md). Items 3, 4, 6, 8, 9 not yet applicable (no input, no protected endpoints, no inference, health intentionally unaudited). Score 4/9 pass, 5 pending. Top fix: auth and audit helper before the first real endpoint.
+- 04 security-and-rls (PR #2 + this PR): pass on items 2 (no secrets; history scanned before going public), 3 (HTTPS is Vercel's job; HSTS header set; **unverified** until deployed), 7 (headers verified with curl). Item 4 partial (no input yet). Items 1, 5, 6, 8, 9 not yet applicable. Known weakness: CSP still allows `unsafe-inline`. Score 1/9 verified pass (item 2), 7 verified in dev only.
+- 01 frontend and 10 caching: `private, no-store` verified for dynamic routes and long-lived caching for hashed assets (10 item 8, item 2 partial). Lighthouse/LCP not recorded.
+
+### Known issues
+
+- `npm audit`: high `braces` advisory via the dev-only ESLint chain (`eslint-config-next`). The suggested fix is a breaking downgrade, so left alone. Revisit when `eslint-config-next` updates; tracked, not accepted permanently.
 
 ## Pre-launch checklist
 
