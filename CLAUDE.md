@@ -306,6 +306,7 @@ To be filled when the app is scaffolded (install, dev, lint, typecheck, test, bu
 - Don't add a silent cloud LLM fallback (see the LLM selection section for why).
 - Don't log full request bodies in error tracking.
 - Don't run Ollama inside Docker on the dev laptop (host it, Docker space is limited).
+- The GitHub repo is public: never commit methodology prompt text, the practice owner's example reports, or any client-derived data. They live in the database and local files only.
 - Don't skip the dev-stub mode — Phase A productivity depends on not running real inference for every feature test.
 - Don't downgrade multi-tenancy to "one user, we can add org_id later." The "one user today, enterprise shape" principle is load-bearing.
 
