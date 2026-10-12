@@ -4,6 +4,7 @@ Source of truth for project state. Update after every commit or milestone. Conve
 
 ## Done
 
+- 2026-10-12: `feat/inference-stub`: `lib/ai/models.ts` (model role constants + `resolveModel` with per-organization overrides) and `lib/ai/inference.ts` (`runInference`, stub mode over Ollama's OpenAI-compatible API via Vercel AI SDK `ai@7.0.138` + `@ai-sdk/openai-compatible@3.0.68`; real mode throws `not_implemented`). 21 new unit tests with a mocked transport (25 total pass; lint and typecheck clean). Manual run against local Ollama `qwen3:1.7b`: replied "ready" in about 4.9 s (cold), 23 in / 2 out tokens; a dead port returned the `unreachable` error. No DB writes, routes, or UI.
 - 2026-10-08: Repo initialized (`git init`) on `chore/workflow-scaffold`; baseline `CLAUDE.md` committed.
 - 2026-10-12: PRs #1 and #2 merged. PR #2 = Next.js 16.4 app, Tailwind + shadcn defaults, zod env validation at startup (4 tests), Vitest, security headers, `private, no-store` default for dynamic routes.
 - 2026-10-12: `feat/drizzle-neon`: Drizzle (neon-serverless WebSocket pool on the pooled URL; drizzle-kit on the unpooled URL), migration `0000_enable_pgvector` applied to Neon `dev` (verified: `vector` 0.8.6 installed, 1 migration recorded), `GET /api/health` (200 ok with real DB; 503 with a broken URL; neither log nor response leaks credentials or host). `channel_binding=require` caused no problems.
@@ -12,10 +13,12 @@ Source of truth for project state. Update after every commit or milestone. Conve
 
 ## In progress
 
-- Phase A app scaffold, PR 2 of 3 (`feat/drizzle-neon`): open for review. PR 3 (`feat/ci`) next.
+- Phase A app scaffold: `feat/drizzle-neon` merged (PR #3); `feat/ci` still next.
+- `feat/inference-stub`: PR open for review (inference wrapper, stub mode only).
 
 ## Next up
 
+0. Inference follow-ups, each blocked on something else: per-organization `inference_endpoint` / `model_config` wiring (needs the organizations table); SSRF allow-list for `inference_endpoint` (Tailscale/Cloudflare hosts), enforced where admin sets it (backend-builder); streaming; `real` mode with the three-pass pipeline (needs `methodology_prompts` and Sam/practice-owner input on prompt content).
 1. Plan Mode: Phase A scaffold (Next.js 16 + Tailwind + shadcn/ui + Drizzle + Neon), then data model migrations. Sam picks which to plan first.
 2. Add `.github/workflows/ci.yml` (then add the checks job as a required status check on `main`) in the same PR that adds the app's lint/typecheck/test/build scripts.
 3. Decide auth provider in the plan: Neon Auth (Better Auth, data in `neon_auth` schema) vs Auth.js; confirm Neon BAA coverage and role fit first. Clerk is out.
@@ -28,7 +31,13 @@ Source of truth for project state. Update after every commit or milestone. Conve
 - Assumed (Claude, 2026-10-08, **unconfirmed**): the repo is created without any commit on `main`; the first branch is `chore/workflow-scaffold`. `main` will be created from it on merge.
 - Assumed (Claude, 2026-10-08, **unconfirmed**): `.github/workflows/ci.yml` is deferred until the app stack exists.
 
+- Decided (Sam, 2026-10-12): raise the Node floor to `>=22` (`package.json` engines, `CLAUDE.md`). Reason: `ai` and `@ai-sdk/*` declare `node >=22`; Sam develops on Node 24 and Vercel supports 22/24.
+- Decided (Claude, 2026-10-12, within Sam's approved plan): stub mode ignores any caller prompt and sends one fixed neutral prompt, per `CLAUDE.md` ("single trivial prompt"). The wrapper has no retries (`maxRetries: 0`) and contacts one endpoint per call.
+
 ### Findings
+
+- Finding (Claude, 2026-10-12, verified by curl against Ollama 0.40.2): `qwen3:1.7b` is a thinking model. Without `reasoning_effort: "none"` on `/v1/chat/completions`, it spent all 64 tokens on reasoning and returned empty `content`; with it, `content` is "ready" in 2 tokens. The wrapper sends it (the `--think=false` equivalent) and also strips inline `<think>` blocks as a safety net. A real-mode worker (`qwen3:8b`) must be re-checked for the same behavior.
+- Finding (Claude, 2026-10-12): the registry tags `qwen3:1.7b`, `qwen3:8b`, `qwen3:30b-a3b` exist on ollama.com. Only `qwen3:1.7b` is pulled locally, so the worker and heavy IDs are **unverified on a running Ollama**. The filter role currently defaults to `qwen3:1.7b` (CLAUDE.md allows it or `gemma3:4b`).
 
 - Finding (Claude, 2026-10-08): Neon vs Supabase HIPAA/BAA comparison. Web search only; vendor pages not fetched, so figures are **unverified** until confirmed with each vendor.
   - Neon: HIPAA is self-serve on the **Scale** plan with an accepted BAA; no extra charge now, a 15% invoice surcharge is planned with advance notice (neon.com/docs/security/hipaa). `CLAUDE.md` says "Business tier"; likely stale naming.
@@ -54,6 +63,11 @@ Source of truth for project state. Update after every commit or milestone. Conve
 
 ### Audit self-checks (Claude, 2026-10-12; files re-read from disk; partial/unverified is not pass)
 
+- 14 inference-and-methodology (`feat/inference-stub`; file re-read from disk; items 4-11 not yet applicable, nothing for them exists): **2/11 pass, 1 partial, 8 pending.**
+  - 1 **pass**: the only code importing the AI SDK is `lib/ai/inference.ts` and nothing outside `lib/ai` calls it yet; `mode` comes from `INFERENCE_MODE` (test "reads the mode from INFERENCE_MODE"); stub verified on the laptop with `qwen3:1.7b` (manual run above).
+  - 2 **partial, not pass**: model IDs only in `models.ts` is enforced by a scan test over `lib/`, `app/`, `components/`; but "overrides come from the organization row" is unverifiable until the organizations table exists (overrides are currently function arguments).
+  - 3 **pass**: tests show an unreachable host and a 5xx each make exactly one request to the one configured host, with a fixed error message that contains no prompt, host, or body; manual dead-port run returned `unreachable`; grep finds no cloud provider imports. Caveat: the endpoint allow-list (SSRF) is not built yet; the wrapper only requires http(s) with no embedded credentials.
+  - Top 3 next: (a) item 4/2: load the active prompt and per-org config from the DB once those tables exist; (b) item 7: schema-validate model output (`{content, flags}`) before any pipeline work; (c) item 10: record model/tokens/latency in `llm_metadata` and the audit log (the result is already shaped for it).
 - 05 database-and-storage (this PR): 1 pass (item 8: versioned migration, pooled URL in app code, unpooled only in drizzle config). Items 1-5 and 7 not yet applicable (no tables; arrive with the data-model plan). Item 6 **unverified**: Neon backups/PITR not confirmed on the free dev project, no restore drilled. Score 1/8 pass, 6 pending, 1 unverified. Top fixes: data-model migrations (1-4, 7); confirm Neon restore window and drill one restore (6).
 - 02 apis-and-backend (this PR): items 1, 2, 5, 7 pass for the single route (`/api/health`: consistent path, 503 without internals, minimal body, listed in API.md). Items 3, 4, 6, 8, 9 not yet applicable (no input, no protected endpoints, no inference, health intentionally unaudited). Score 4/9 pass, 5 pending. Top fix: auth and audit helper before the first real endpoint.
 - 04 security-and-rls (PR #2 + this PR): pass on items 2 (no secrets; history scanned before going public), 3 (HTTPS is Vercel's job; HSTS header set; **unverified** until deployed), 7 (headers verified with curl). Item 4 partial (no input yet). Items 1, 5, 6, 8, 9 not yet applicable. Known weakness: CSP still allows `unsafe-inline`. Score 1/9 verified pass (item 2), 7 verified in dev only.
@@ -61,6 +75,7 @@ Source of truth for project state. Update after every commit or milestone. Conve
 
 ### Known issues
 
+- `npm audit --omit=dev` reports 13 (4 moderate, 9 high), all through `braces`/`fast-glob` under `shadcn` (a direct dependency, though a CLI) and dev tooling; none come from `ai` or `@ai-sdk/openai-compatible` (checked after install). Consider moving `shadcn` to devDependencies in a separate change.
 - `npm audit`: high `braces` advisory via the dev-only ESLint chain (`eslint-config-next`). The suggested fix is a breaking downgrade, so left alone. Revisit when `eslint-config-next` updates; tracked, not accepted permanently.
 
 ## Pre-launch checklist
