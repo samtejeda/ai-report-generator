@@ -15,6 +15,13 @@
       "when": 1791910421670,
       "tag": "0001_core_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791910498424,
+      "tag": "0002_rag_audit_jobs",
+      "breakpoints": true
     }
   ]
 }
