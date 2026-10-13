@@ -22,6 +22,13 @@
       "when": 1791910498424,
       "tag": "0002_rag_audit_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791910544359,
+      "tag": "0003_integrity_triggers_purge_and_grants",
+      "breakpoints": true
     }
   ]
 }

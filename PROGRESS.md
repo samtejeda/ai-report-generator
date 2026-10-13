@@ -13,7 +13,7 @@ Source of truth for project state. Update after every commit or milestone. Conve
 ## In progress
 
 - Phase A app scaffold, PR 2 of 3 (`feat/drizzle-neon`): merged (#3). PR 3 (`feat/ci`) next.
-- Data model (`feat/data-model`), plan approved by Sam 2026-10-13. Build order, one commit per step: (1) core tables [done: `0001_core_tables`, generated and `db:check`ed, **not applied** to Neon]; (2) RAG tables + HNSW index, `audit_log`, `jobs` [done: `0002_rag_audit_jobs`, generated and `db:check`ed, not applied]; (3) custom migration: `set_updated_at` trigger, immutability triggers, `purge_client()`, `app_runtime` role and grants; (4) `lib/db/tenant.ts` helper, ESLint restriction on raw `getDb()`, schema-introspection tests; (5) integration tests on a Neon `test` branch (needs `TEST_DATABASE_URL`); (6) apply to Neon `dev` only after Sam signs off the final schema; (7) PITR/restore drill recorded in `docs/RUNBOOK.md`; (8) push, PR, stop.
+- Data model (`feat/data-model`), plan approved by Sam 2026-10-13. Build order, one commit per step: (1) core tables [done: `0001_core_tables`, generated and `db:check`ed, **not applied** to Neon]; (2) RAG tables + HNSW index, `audit_log`, `jobs` [done: `0002_rag_audit_jobs`, generated and `db:check`ed, not applied]; (3) custom migration: `set_updated_at` trigger, immutability triggers, `purge_client()`, `app_runtime` role and grants [done: `0003_integrity_triggers_purge_and_grants`, applied to Neon `test` branch only (project `delicate-boat-70144866`, branch `test` `br-dawn-wind-b5t4yckd`, created 2026-10-13 from `dev`); behavior not yet tested]; (4) `lib/db/tenant.ts` helper, ESLint restriction on raw `getDb()`, schema-introspection tests; (5) integration tests on a Neon `test` branch (needs `TEST_DATABASE_URL`); (6) apply to Neon `dev` only after Sam signs off the final schema; (7) PITR/restore drill recorded in `docs/RUNBOOK.md`; (8) push, PR, stop.
 
 ## Next up
 
@@ -33,7 +33,7 @@ Source of truth for project state. Update after every commit or milestone. Conve
   - D1: active methodology prompt is `report_templates.active_methodology_prompt_id` (composite FK pins it to a prompt of the same template and org), not an `is_active` flag. Reason: `methodology_prompts` rows are then truly never updated. Departs from CLAUDE.md's `is_active` wording; CLAUDE.md to be reconciled when the PR lands.
   - D2: `report_sections` is identity only (key, type, position); `report_versions` holds content, one insert-only row per section edit; current text = highest `version_number`.
   - D3: composite FKs `(organization_id, parent_id)` so the database rejects cross-tenant links.
-  - D4: `app_runtime` NOLOGIN role with no UPDATE/DELETE on immutable tables and no DELETE on domain tables; Sam creates the login role in the Neon console (no passwords in migrations) and `DATABASE_URL` switches to it.
+  - D4: `app_runtime` NOLOGIN role with no UPDATE/DELETE on immutable tables and no DELETE on domain tables; the login role is created with SQL `CREATE ROLE <login> LOGIN PASSWORD '...' IN ROLE app_runtime` (no passwords in migrations) and `DATABASE_URL` switches to it. Do NOT create it in the Neon console: as I recall, console/API-created roles inherit `neon_superuser` and would bypass the grants (**unverified**; the integration tests connect as the real login role to prove the lockdown). Supersedes the plan wording "Sam creates the login role in the Neon console".
   - D5: Postgres RLS deferred to the auth plan; enforcement is query guard + composite FKs + grants.
   - D6: client columns limited to `display_name`, `date_of_birth`, `grade_level`, optional `external_id`. No address, guardian contact, school name, or diagnosis columns.
   - D7: integration tests run on a separate Neon `test` branch of the dev project.
@@ -99,6 +99,8 @@ Source of truth for project state. Update after every commit or milestone. Conve
   Score 1/8 pass. Top 3: immutability triggers + grants (7), RAG/audit/jobs tables with their indexes (1, 4), DB-level tests plus restore drill (2, 3, 6).
 
 - 05 update after step 2 (2026-10-13, file unchanged on re-read): items 1-5 still partial pending DB-level tests but now cover all 14 tables: `audit_log_org_resource_idx` on `(organization_id, resource_type, resource_id, created_at)`; `rag_embeddings_embedding_hnsw_idx` (HNSW, cosine); `rag_embeddings_chunk_fk` cascades chunk to embedding. Item 7 still fail until step 3; item 6 unverified. Score 1/8 pass.
+
+- 05 update after step 3 (2026-10-13, file unchanged on re-read): item 7 still **unverified** (not fail): triggers and grants exist and the migration applies on the `test` branch, but no test has tried to UPDATE `report_versions` or DELETE `audit_log` yet. `.env.test.local` (gitignored) holds the test-branch URLs. Score 1/8 pass until step 5.
 
 ### Known issues
 
