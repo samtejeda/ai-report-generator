@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read-only token; CI needs no repo secrets and never touches Neon.
+permissions:
+  contents: read
+
+# A new push to the same PR cancels the stale run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Job name is the required status check on main: keep it `checks`.
+  checks:
+    name: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # Migration consistency only; no database connection.
+      - name: Drizzle migration check
+        run: npm run db:check
+
+      - name: Build
+        run: npm run build
+        env:
+          # Placeholders so env validation passes. Not real; nothing connects.
+          DATABASE_URL: postgresql://u:p@h/d
+          DATABASE_URL_UNPOOLED: postgresql://u:p@h/d
+          NEXT_TELEMETRY_DISABLED: "1"
