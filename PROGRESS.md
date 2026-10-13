@@ -40,6 +40,8 @@ Source of truth for project state. Update after every commit or milestone. Conve
 - Assumed (Claude, 2026-10-13, **unconfirmed**): `app_runtime` will keep DELETE on `rag_documents`, `rag_chunks`, `rag_embeddings` and `jobs` (derived/regenerable data; re-indexing replaces chunks). Clinical tables (`clients`, `reports`, `report_*`, `client_history`) get no DELETE; those go through `purge_client()`. Client-derived RAG documents (`client_note`, `client_report`) must carry a `client_id` (CHECK) so a purge always finds them.
 - Assumed (Claude, 2026-10-13, **unconfirmed**): `organizations.type` defaults to `private_practice` (free text, no CHECK); `data_retention_days` exists but nothing enforces it (retention policy is for Sam and the lawyer); `audit_log` rows are kept after a client purge (UUIDs only, no PHI); status/type columns are text + CHECK rather than pg enums.
 
+- Decided (Sam, 2026-10-13): Neon branches are not phases. Phases A and B both use the `dev` branch with synthetic data (only the tenant's `inference_endpoint` / `model_config` change between them). `test` is a scratch branch for DB integration tests only (reset from `dev` when heavy; never holds anything of value). Phase C uses a new production project under the company Neon organization (Scale plan, BAA signed); the dev project, including its unused default `production` branch, must never hold real data. Open, for the CI/deploy plan: Vercel previews and the deployed app both point at `dev` until Phase C unless a `staging` branch is added.
+
 ### Auth plan must answer (left open by the data model)
 
 `users` in `lib/db/schema/users.ts` is a minimal, marked extension point (no `password_hash`, no sessions).
