@@ -49,7 +49,7 @@ The per-organization `inference_endpoint` + `model_config` pattern is what makes
 
 ## Tech stack
 
-- **Framework:** Next.js 16 (App Router, Turbopack default), TypeScript end-to-end. Node.js 20+.
+- **Framework:** Next.js 16 (App Router, Turbopack default), TypeScript end-to-end. Node.js 22+.
 - **Styling:** Tailwind + shadcn/ui
 - **Database:** Postgres on Neon (use the *pooled* connection string from Next.js). pgvector extension for RAG embeddings.
 - **ORM:** Drizzle, with Drizzle migrations from day one — no auto-sync schemas
@@ -265,7 +265,7 @@ drizzle/             committed migrations
 
 ## Dev commands
 
-Node >= 20.9 (developed on Node 24), npm.
+Node >= 22 (developed on Node 24), npm.
 
 - `npm run dev`: dev server on localhost:3000 (Turbopack).
 - `npm run lint` / `npm run typecheck` / `npm test`: ESLint, `next typegen && tsc --noEmit`, Vitest (`npm run test:watch` to watch).
