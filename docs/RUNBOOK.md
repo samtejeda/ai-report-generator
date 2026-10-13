@@ -8,11 +8,39 @@ _TODO when Vercel is connected._ Expected: promote the previous Vercel deploymen
 
 ## Database restore (Neon)
 
-_TODO._ Expected: Neon point-in-time restore / branch from a timestamp, validate, repoint the pooled connection string. Last drilled: never (**unverified**).
+Neon keeps a history window per project (dev project `delicate-boat-70144866`: **6 hours**, `history_retention_seconds: 21600`, Postgres 18). Recovery inside that window:
+
+1. Pick the timestamp just before the damage (UTC, RFC 3339).
+2. Do NOT restore over the damaged branch first. Make a scratch copy and restore that:
+   `neon branches create --name restore-check --parent <branch> --project-id <id>`
+   `neon branches restore restore-check "<branch>@<timestamp>" --project-id <id>`
+3. Connect to the scratch branch (`neon connection-string restore-check --project-id <id> --role-name neondb_owner`; a branch with several roles needs `--role-name`) and validate row counts and the data you expect.
+4. Only then decide: restore the real branch in place (`neon branches restore <branch> <branch>@<timestamp>`; Neon keeps a backup branch of the pre-restore state) or copy the needed rows across.
+5. Repoint nothing if restored in place (same endpoint). Delete the scratch branch when done.
+
+Last drilled: 2026-10-13 on the dev project's `test` branch (see Backup drill). Not drilled on a production project (does not exist yet) and the window there will differ by plan.
 
 ## Backup drill
 
-_TODO._ Perform a restore into a Neon branch once, record the date and result here before Phase C.
+- **2026-10-13 (Claude, with Sam's approval of the data-model plan): passed, dev project only.**
+  - Created scratch branch `restore-drill` from `test`, then `neon branches restore restore-drill "test@2026-10-13T17:02:25Z"` (about 4 s).
+  - Verified against the live `test` branch: scratch had 2 organizations / 7 clients / 5 report versions / 4 audit rows at that moment, versus 6 / 21 / 15 / 12 on `test` now. Schema and `purge_client()` were present in the restored copy.
+  - Deleted the scratch branch afterwards. `test`, `dev`, `production` were not modified.
+  - Limits: in-place restore of a real branch was not exercised (scratch copy only); the free-plan window is 6 hours, so this proves recoverability, not long-term backup retention. Re-drill on the production Neon project (Scale plan) before Phase C and record it here.
+
+## Database roles and the app login (Neon)
+
+Migration `0003` creates the NOLOGIN group role `app_runtime` with per-table least-privilege grants. The app connects as a **login role that is a member of it**, created with SQL, never in a migration and never in the Neon console (console/API roles are `neon_superuser` members and would bypass the grants; verified on the test branch that a SQL-created member is not):
+
+```sql
+CREATE ROLE <login_name> LOGIN PASSWORD '<generated, 32+ hex chars>' IN ROLE app_runtime;
+```
+
+Then set `DATABASE_URL` (pooled) to that role. Keep `DATABASE_URL_UNPOOLED` on the owner role: it is for drizzle-kit migrations only. Rotate with `ALTER ROLE <login_name> PASSWORD '...'`. Integration tests use `app_runtime_test` on the `test` branch with the password in the gitignored `.env.test.local`.
+
+## Hard deletion of a client
+
+`SELECT purge_client(<org_uuid>, <client_uuid>)` (via `tenantDb(ctx).purgeClient(id)`) deletes the client and all derived rows and returns per-table counts; it is not wired to any route and **needs Sam's explicit approval before it touches anything but synthetic data**. `audit_log` is never touched. Purged data persists in Neon history/backups until the retention window passes: a wording question for the privacy lawyer (see PROGRESS pre-launch checklist).
 
 ## Inference endpoint down (Ollama / tunnel)
 

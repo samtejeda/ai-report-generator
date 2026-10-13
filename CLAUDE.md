@@ -152,13 +152,13 @@ All domain tables include `organization_id`, `created_at`, `updated_at`, and `de
 - **users** — practice owner / associate / admin roles. Belong to one organization. `password_hash` (bcrypt).
 - **clients** — the children/clients being evaluated. `external_id` optional (if the practice has their own ID system). Minimum PII required.
 - **client_history** — longitudinal threads per client: prior evaluations, re-eval cadence (IDEA requires 3-year re-evals), notes between sessions.
-- **report_templates** — section structure as `jsonb`. References active methodology prompt. v1 scope: psychoeducational evaluation template.
-- **methodology_prompts** — *immutable*, versioned. New version = new row. One `is_active` per template at a time. Tracks `created_by` and change `notes`.
+- **report_templates** — section structure as `jsonb`. `active_methodology_prompt_id` points at the one active prompt version (composite FK keeps it within the same template and org). v1 scope: psychoeducational evaluation template.
+- **methodology_prompts** — *immutable*, versioned. New version = new row; never updated or deleted (DB triggers + grants). Activating a version moves the template's `active_methodology_prompt_id` pointer, so exactly one is active per template. Tracks `created_by` and change `notes`.
 - **reports** — references `methodology_prompt_id`, `template_id`, `client_id`. Status: draft | generating | generated | finalized | error.
-- **report_versions** — every edit creates a new row, never overwrites. `edit_type`: `ai_generated` | `human_edit` | `ai_regenerated_section`. `llm_metadata` for model/tokens/latency/cost (zero cost for SLM, but still useful for debugging).
-- **report_sections** — some sections hold structured data (test scores, normed assessment results), others hold prose. Model this flexibility via `jsonb` content with a type discriminator.
+- **report_versions** — one row per section edit, insert-only (DB triggers + grants); the current text of a section is its highest `version_number`. `edit_type`: `ai_generated` | `human_edit` | `ai_regenerated_section`. `llm_metadata` for model/tokens/latency/cost (zero cost for SLM, but still useful for debugging).
+- **report_sections** — stable identity of a section within a report (`section_key`, `section_type` prose | structured, `position`). Content lives in `report_versions.content` (`jsonb`, shape chosen by `section_type`).
 - **rag_documents** / **rag_chunks** / **rag_embeddings** — pgvector-backed. Scoped by organization.
-- **audit_log** — append-only. Indexes on `(organization_id, resource_type, resource_id, created_at)`.
+- **audit_log** — append-only (the app role has SELECT/INSERT only; triggers block UPDATE/DELETE/TRUNCATE for everyone). No foreign keys, so purges never touch it. Indexes on `(organization_id, resource_type, resource_id, created_at)`.
 - **jobs** — for async work when we need it. Not used in v1.
 
 UUIDs throughout, not auto-incrementing integers.
@@ -272,7 +272,7 @@ Node >= 20.9 (developed on Node 24), npm.
 - `npm run build` / `npm start`: production build and server.
 - Environment: copy `.env.example` to `.env.local` (or run `neon link` against the dev branch). `lib/env.ts` validates it at server start and fails with the variable name, never the value.
 - Ollama (host, not Docker): `brew services start ollama`, model `qwen3:1.7b` for the dev stub.
-- Database: `npm run db:generate` (new migration from schema changes; `npx drizzle-kit generate --custom --name=<slug>` for hand-written SQL), `npm run db:migrate` (applies to the database in `DATABASE_URL_UNPOOLED`; currently the Neon `dev` branch), `npm run db:check` (migration consistency, no DB connection). Commit the generated files in `drizzle/`.
+- Database: `npm run db:generate` (new migration from schema changes; `npx drizzle-kit generate --custom --name=<slug>` for hand-written SQL), `npm run db:migrate` (applies to the database in `DATABASE_URL_UNPOOLED`; currently the Neon `dev` branch), `npm run db:check` (migration consistency, no DB connection). Commit the generated files in `drizzle/`. Data access goes through `tenantDb(ctx)` in `lib/db/tenant.ts` (ESLint bans the raw client elsewhere). Hard deletion of a client is `purge_client()` only. DB integration tests (`lib/db/integration.test.ts`) run against a scratch Neon branch using `TEST_DATABASE_URL`, `TEST_DATABASE_URL_UNPOOLED`, `TEST_APP_ROLE_PASSWORD` in the gitignored `.env.test.local`, and skip when those are absent. The app should connect as a login role that is a member of `app_runtime` (see `docs/RUNBOOK.md`).
 
 **Next.js 16 notes:** `AGENTS.md` (written by Next) says this version differs from older training data; read `node_modules/next/dist/docs/` before writing framework code. Cache Components is on, so caching is opt-in via `use cache`. Never use `use cache` on tenant-scoped or PHI data.
 

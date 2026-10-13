@@ -13,11 +13,11 @@ Source of truth for project state. Update after every commit or milestone. Conve
 ## In progress
 
 - Phase A app scaffold, PR 2 of 3 (`feat/drizzle-neon`): merged (#3). PR 3 (`feat/ci`) next.
-- Data model (`feat/data-model`), plan approved by Sam 2026-10-13. Build order, one commit per step: (1) core tables [done: `0001_core_tables`, generated and `db:check`ed, **not applied** to Neon]; (2) RAG tables + HNSW index, `audit_log`, `jobs` [done: `0002_rag_audit_jobs`, generated and `db:check`ed, not applied]; (3) custom migration: `set_updated_at` trigger, immutability triggers, `purge_client()`, `app_runtime` role and grants [done: `0003_integrity_triggers_purge_and_grants`, applied to Neon `test` branch only (project `delicate-boat-70144866`, branch `test` `br-dawn-wind-b5t4yckd`, created 2026-10-13 from `dev`); behavior not yet tested]; (4) `lib/db/tenant.ts` helper, ESLint restriction on raw `getDb()`, schema-introspection tests [done: 44 unit tests, no DB needed; lint rule proven with a throwaway probe file]; (5) integration tests on a Neon `test` branch (needs `TEST_DATABASE_URL`) [done: 22 tests in `lib/db/integration.test.ts`, all pass, repeatable, skipped when `.env.test.local` is absent]; (6) apply to Neon `dev` only after Sam signs off the final schema; (7) PITR/restore drill recorded in `docs/RUNBOOK.md`; (8) push, PR, stop.
+- Data model (`feat/data-model`): steps 1-5 and 7 done, PR open for Sam's review (2026-10-13); step 6 (apply to Neon `dev`) held for Sam's schema sign-off. Plan approved by Sam 2026-10-13. Build order, one commit per step: (1) core tables [done: `0001_core_tables`, generated and `db:check`ed, **not applied** to Neon]; (2) RAG tables + HNSW index, `audit_log`, `jobs` [done: `0002_rag_audit_jobs`, generated and `db:check`ed, not applied]; (3) custom migration: `set_updated_at` trigger, immutability triggers, `purge_client()`, `app_runtime` role and grants [done: `0003_integrity_triggers_purge_and_grants`, applied to Neon `test` branch only (project `delicate-boat-70144866`, branch `test` `br-dawn-wind-b5t4yckd`, created 2026-10-13 from `dev`); behavior not yet tested]; (4) `lib/db/tenant.ts` helper, ESLint restriction on raw `getDb()`, schema-introspection tests [done: 44 unit tests, no DB needed; lint rule proven with a throwaway probe file]; (5) integration tests on a Neon `test` branch (needs `TEST_DATABASE_URL`) [done: 22 tests in `lib/db/integration.test.ts`, all pass, repeatable, skipped when `.env.test.local` is absent]; (6) apply to Neon `dev` only after Sam signs off the final schema; (7) PITR/restore drill recorded in `docs/RUNBOOK.md` [done 2026-10-13, scratch branch restored to an earlier timestamp and compared, then deleted]; (8) push, PR, stop.
 
 ## Next up
 
-1. Plan Mode: Phase A scaffold (Next.js 16 + Tailwind + shadcn/ui + Drizzle + Neon), then data model migrations. Sam picks which to plan first.
+1. Auth and roles plan (Plan Mode first); it must answer the questions listed under "Auth plan must answer". Then `lib/audit.ts` (explicit helper with a no-PHI metadata allow-list, over the `audit_log` table that now exists).
 2. Add `.github/workflows/ci.yml` (then add the checks job as a required status check on `main`) in the same PR that adds the app's lint/typecheck/test/build scripts.
 3. Decide auth provider in the plan: Neon Auth (Better Auth, data in `neon_auth` schema) vs Auth.js; confirm Neon BAA coverage and role fit first. Clerk is out.
 
@@ -110,10 +110,10 @@ Source of truth for project state. Update after every commit or milestone. Conve
   3. pass: duplicate prompt version, duplicate template slug, duplicate external id (soft-delete aware), duplicate report version number all raise 23505; one active prompt per template is a pointer whose FK rejects another template's or org's prompt.
   4. pass: FK-covering-index test over all FKs; `audit_log_org_resource_idx`; `rag_embeddings_embedding_hnsw_idx` confirmed in `pg_indexes` as HNSW `vector_cosine_ops`. Query plans not EXPLAINed (no data volume yet).
   5. pass: no bytea/blob columns (asserted); exports are generated on demand (no export code yet).
-  6. **unverified**: no restore drilled yet (step 7).
+  6. pass (dev project only): `neon branches restore` of a scratch copy of `test` to an earlier timestamp showed the earlier row counts (2 orgs vs 6 now) with schema intact; recorded in `docs/RUNBOOK.md`. Caveat: 6-hour history window on the dev project; in-place restore not exercised; re-drill on the production project before Phase C.
   7. pass: UPDATE/DELETE/TRUNCATE on `report_versions`, `methodology_prompts`, `audit_log` fail for the app role (42501) and the owner (23001; plain TRUNCATE of FK-referenced `methodology_prompts` is refused by Postgres 0A000, and CASCADE is stopped by the `report_versions` trigger); FK cascade cannot bypass the trigger; setting `app.purge` by hand does not help the app.
   8. pass: four versioned migrations (`0000`-`0003`), no `db push`, app code uses the pooled `DATABASE_URL`; `db:check` clean. Caveat: `dev` still has only `0000` applied.
-  Score 7/8 pass, 1 unverified. Top 3 remaining: restore drill (6); apply to `dev` after Sam's sign-off and switch `DATABASE_URL` to the `app_runtime` login role; `lib/audit.ts` must enforce the no-PHI metadata allow-list (04 item 9 second half).
+  Score 8/8 pass (item 6 with the caveat above). Top 3 remaining: apply to `dev` after Sam's sign-off and switch `DATABASE_URL` to the `app_runtime` login role; `lib/audit.ts` must enforce the no-PHI metadata allow-list (04 item 9 second half).
 - 04 security-and-rls overlap (data layer only): item 1 pass at the data layer (cross-tenant read/update/soft-delete/FK tests; no route exists yet to test end to end); item 9: append-only at DB permission level pass, "no PHI content" not yet enforceable until `lib/audit.ts` exists.
 
 ### Known issues
@@ -134,11 +134,13 @@ Single home for anything gated on a later condition. Do not bury these in dated 
 - [ ] Audit log retention policy set (6 years minimum) and append-only enforced at DB permission level.
 - [ ] Hard-deletion path propagates to report versions, RAG embeddings, derived data; tested.
 - [ ] Tailscale/Cloudflare tunnel in place for the cloud-to-SLM path; endpoint not publicly exposed.
-- [ ] Backup restore performed once and recorded in `docs/RUNBOOK.md`.
+- [ ] Backup restore performed once and recorded in `docs/RUNBOOK.md`. (Drilled 2026-10-13 on the dev project's `test` branch only; repeat on the production Neon project.)
 - [ ] Billing alerts set on Vercel and Neon.
 - [ ] Uptime monitoring and alerting in place.
 - [ ] Phase C gate: Sam explicitly approves real data flowing.
 
 ## Blocked on Sam
 
-- Nothing at the moment.
+- Review the `feat/data-model` PR and sign off the final schema (14 tables, migrations `0001`-`0003`). Nothing has been applied to Neon `dev` (still only `0000_enable_pgvector`). After sign-off: run `npm run db:migrate` against `dev` (one command, owner role), then create the app login role with SQL per `docs/RUNBOOK.md` and point `DATABASE_URL` at it.
+- Confirm the **assumptions** logged under "Decisions & assumptions" dated 2026-10-13 (defaults for `organizations.type`, retention column unenforced, audit rows kept after purge, text+CHECK instead of enums, `app_runtime` keeps DELETE on RAG/jobs tables).
+- Legal/policy (not blocking this PR): how long purged client data may persist in Neon history/backups, and how long `audit_log` rows are kept after a purge.
