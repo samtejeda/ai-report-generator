@@ -15,8 +15,10 @@
     "db:check": "drizzle-kit check"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.68",
     "@base-ui/react": "^1.9.0",
     "@neondatabase/serverless": "^1.2.0",
+    "ai": "^7.0.138",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
     "drizzle-orm": "^0.45.4",
@@ -41,6 +43,6 @@
     "vitest": "^5.0.3"
   },
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=22.0.0"
   }
 }
