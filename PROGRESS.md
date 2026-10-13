@@ -12,7 +12,8 @@ Source of truth for project state. Update after every commit or milestone. Conve
 
 ## In progress
 
-- Phase A app scaffold, PR 2 of 3 (`feat/drizzle-neon`): open for review. PR 3 (`feat/ci`) next.
+- Phase A app scaffold, PR 2 of 3 (`feat/drizzle-neon`): merged (#3). PR 3 (`feat/ci`) next.
+- Data model (`feat/data-model`), plan approved by Sam 2026-10-13. Build order, one commit per step: (1) core tables [done: `0001_core_tables`, generated and `db:check`ed, **not applied** to Neon]; (2) RAG tables + HNSW index, `audit_log`, `jobs`; (3) custom migration: `set_updated_at` trigger, immutability triggers, `purge_client()`, `app_runtime` role and grants; (4) `lib/db/tenant.ts` helper, ESLint restriction on raw `getDb()`, schema-introspection tests; (5) integration tests on a Neon `test` branch (needs `TEST_DATABASE_URL`); (6) apply to Neon `dev` only after Sam signs off the final schema; (7) PITR/restore drill recorded in `docs/RUNBOOK.md`; (8) push, PR, stop.
 
 ## Next up
 
@@ -27,6 +28,32 @@ Source of truth for project state. Update after every commit or milestone. Conve
 - Decided (Sam, 2026-10-08): add `inference-builder` (owns `lib/ai/*`) with its own checklist `audit-prompts/14-inference-and-methodology.md`. Replaces the earlier assumption that `backend-builder` would own it.
 - Assumed (Claude, 2026-10-08, **unconfirmed**): the repo is created without any commit on `main`; the first branch is `chore/workflow-scaffold`. `main` will be created from it on merge.
 - Assumed (Claude, 2026-10-08, **unconfirmed**): `.github/workflows/ci.yml` is deferred until the app stack exists.
+
+- Decided (Sam, 2026-10-13): data-model plan approved with the recommended options:
+  - D1: active methodology prompt is `report_templates.active_methodology_prompt_id` (composite FK pins it to a prompt of the same template and org), not an `is_active` flag. Reason: `methodology_prompts` rows are then truly never updated. Departs from CLAUDE.md's `is_active` wording; CLAUDE.md to be reconciled when the PR lands.
+  - D2: `report_sections` is identity only (key, type, position); `report_versions` holds content, one insert-only row per section edit; current text = highest `version_number`.
+  - D3: composite FKs `(organization_id, parent_id)` so the database rejects cross-tenant links.
+  - D4: `app_runtime` NOLOGIN role with no UPDATE/DELETE on immutable tables and no DELETE on domain tables; Sam creates the login role in the Neon console (no passwords in migrations) and `DATABASE_URL` switches to it.
+  - D5: Postgres RLS deferred to the auth plan; enforcement is query guard + composite FKs + grants.
+  - D6: client columns limited to `display_name`, `date_of_birth`, `grade_level`, optional `external_id`. No address, guardian contact, school name, or diagnosis columns.
+  - D7: integration tests run on a separate Neon `test` branch of the dev project.
+- Assumed (Claude, 2026-10-13, **unconfirmed**): `organizations.type` defaults to `private_practice` (free text, no CHECK); `data_retention_days` exists but nothing enforces it (retention policy is for Sam and the lawyer); `audit_log` rows are kept after a client purge (UUIDs only, no PHI); status/type columns are text + CHECK rather than pg enums.
+
+### Auth plan must answer (left open by the data model)
+
+`users` in `lib/db/schema/users.ts` is a minimal, marked extension point (no `password_hash`, no sessions).
+- Provider: Neon Auth (Better Auth) vs Auth.js; where credentials live; is `password_hash` needed at all?
+- How the auth identity links to `users.id`; email unique globally or per org (provisional: per org, active rows, case-insensitive).
+- Can a user belong to more than one org (CLAUDE.md says one)?
+- Permission matrix; client assignment model for associates (`client_assignments` join table vs column on `clients`).
+- Org bootstrap and invitations (how org #1 is created).
+- Session storage and expiry; reset and verification token tables; MFA.
+- Failed logins for an unknown user have no org: make `audit_log.organization_id` nullable, or send those events to application logs?
+- Role from the session claim or looked up in the DB per request?
+- Deactivation: `deleted_at` or a separate flag?
+- Where rate-limit state lives.
+- How the session produces the `tenantDb` context.
+- If Neon Auth is used, grants for `app_runtime` on the `neon_auth` schema.
 
 ### Findings
 
@@ -58,6 +85,17 @@ Source of truth for project state. Update after every commit or milestone. Conve
 - 02 apis-and-backend (this PR): items 1, 2, 5, 7 pass for the single route (`/api/health`: consistent path, 503 without internals, minimal body, listed in API.md). Items 3, 4, 6, 8, 9 not yet applicable (no input, no protected endpoints, no inference, health intentionally unaudited). Score 4/9 pass, 5 pending. Top fix: auth and audit helper before the first real endpoint.
 - 04 security-and-rls (PR #2 + this PR): pass on items 2 (no secrets; history scanned before going public), 3 (HTTPS is Vercel's job; HSTS header set; **unverified** until deployed), 7 (headers verified with curl). Item 4 partial (no input yet). Items 1, 5, 6, 8, 9 not yet applicable. Known weakness: CSP still allows `unsafe-inline`. Score 1/9 verified pass (item 2), 7 verified in dev only.
 - 01 frontend and 10 caching: `private, no-store` verified for dynamic routes and long-lived caching for hashed assets (10 item 8, item 2 partial). Lighthouse/LCP not recorded.
+
+- 05 database-and-storage (`feat/data-model` step 1, 2026-10-13; file re-read from disk; nothing applied to Neon yet, so DB-level behavior is **unverified**): 
+  1. partial: core tables follow conventions (`clients.organization_id uuid NOT NULL`, uuid PKs, timestamptz); RAG, `audit_log`, `jobs` not yet written.
+  2. partial: explicit delete behavior on every FK (`reports_client_fk` cascade, `report_versions_created_by_fk` restrict); purge function not yet written, cascade not yet tested.
+  3. partial: one active prompt per template is structural (`report_templates.active_methodology_prompt_id`); `methodology_prompts_template_version_uq` on `(template_id, version_number)`; other uniques present; untested against a DB.
+  4. partial: org-leading indexes on all FK paths (`reports_org_client_created_idx`); `audit_log` composite and pgvector HNSW not yet written.
+  5. partial: no `bytea` or file columns so far; complete only when all tables exist.
+  6. unverified: no restore drilled.
+  7. fail (pending): no triggers or grants yet.
+  8. pass: `0001_core_tables.sql` generated by drizzle-kit, `db:check` clean, no `db push`, app uses the pooled URL.
+  Score 1/8 pass. Top 3: immutability triggers + grants (7), RAG/audit/jobs tables with their indexes (1, 4), DB-level tests plus restore drill (2, 3, 6).
 
 ### Known issues
 
