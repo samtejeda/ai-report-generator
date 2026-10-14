@@ -22,6 +22,8 @@ Source of truth for project state. Update after every commit or milestone. Conve
 
 ## Next up
 
+0. Supply-chain pass (`platform-ops-builder`, checklist 15): baseline dependency report, CI guards (install-script allowlist, `npm audit signatures`, registry check, dependency review on PRs), `process.env` lint rule, and drop `DATABASE_URL_UNPOOLED` from the app's runtime env schema. Added 2026-10-13 at Sam's request; assessed as mostly missing except `npm ci` hash verification, which already runs in CI.
+
 0. Inference follow-ups, each blocked on something else: per-organization `inference_endpoint` / `model_config` wiring (needs the organizations table); SSRF allow-list for `inference_endpoint` (Tailscale/Cloudflare hosts), enforced where admin sets it (backend-builder); streaming; `real` mode with the three-pass pipeline (needs `methodology_prompts` and Sam/practice-owner input on prompt content).
 1. Auth and roles plan (Plan Mode first); it must answer the questions listed under "Auth plan must answer". Then `lib/audit.ts` (explicit helper with a no-PHI metadata allow-list, over the `audit_log` table that now exists).
 2. ~~Plan Mode: Phase A scaffold (Next.js 16 + Tailwind + shadcn/ui + Drizzle + Neon), then data model migrations. Sam picks which to plan first.~~ Superseded 2026-10-13: scaffold merged (PRs #2-#4) and the data model is built in PR #11 (awaiting Sam's sign-off).
@@ -153,7 +155,7 @@ Source of truth for project state. Update after every commit or milestone. Conve
 - `npm audit --omit=dev` reports 13 (4 moderate, 9 high), all through `braces`/`fast-glob` under `shadcn` (a direct dependency, though a CLI) and dev tooling; none come from `ai` or `@ai-sdk/openai-compatible` (checked after install). Consider moving `shadcn` to devDependencies in a separate change.
 - Lockfile hygiene: `package-lock.json` must be generated on Linux or CI's `npm ci` can fail on optional wasm packages (sharp, tailwind oxide). macOS `npm install` strips those entries and `--package-lock-only` does not restore them. Fix recipe: copy `package.json` + lockfile into a scratch dir and run `docker run --rm -v <dir>:/w -w /w node:24-slim npm install --package-lock-only --ignore-scripts`, then copy the lockfile back. Dependabot runs on Linux, so its PRs should keep this correct. Docker Desktop's default 1 GB VM is too small to run `next build`; use CI for the build.
 
-- `npm audit`: high `braces` advisory via the dev-only ESLint chain (`eslint-config-next`). The suggested fix is a breaking downgrade, so left alone. Revisit when `eslint-config-next` updates; tracked, not accepted permanently.
+- (Superseded 2026-10-13: the advisory comes through `shadcn`, a direct dependency, not the ESLint chain; see the entry above and checklist 15 item 7.) `npm audit`: high `braces` advisory via the dev-only ESLint chain (`eslint-config-next`). The suggested fix is a breaking downgrade, so left alone. Revisit when `eslint-config-next` updates; tracked, not accepted permanently.
 
 ## Pre-launch checklist
 

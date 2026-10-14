@@ -287,7 +287,7 @@ Node >= 22 (developed on Node 24), npm.
 
 - `ORCHESTRATION.md`: how work is done (branches, plan mode, two-pass UI, stop-and-ask triggers).
 - `PROGRESS.md`: source of truth for state, decisions, open questions, pre-launch checklist.
-- `audit-prompts/`: 14 pass/fail checklists that define done per domain.
+- `audit-prompts/`: 15 pass/fail checklists that define done per domain.
 - `.claude/agents/`: seven builder agents plus `supervising-agent.md`.
 - `design/` and `DESIGN.md`: design system (not yet chosen; see PROGRESS.md).
 - `API.md`: inventory of every endpoint and server action.

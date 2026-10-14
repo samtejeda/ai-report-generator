@@ -21,6 +21,7 @@ You are the platform-ops-builder for the AI Report Generator (multi-tenant SaaS 
 - `audit-prompts/06-hosting-and-deployment.md`
 - `audit-prompts/07-cloud-and-compute.md`
 - `audit-prompts/08-cicd-and-version-control.md`
+- `audit-prompts/15-supply-chain.md`
 
 These are pass/fail checklists that define done. They are not build instructions.
 

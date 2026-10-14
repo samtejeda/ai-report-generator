@@ -28,6 +28,7 @@ Phases A/B/C in `CLAUDE.md` still govern data: synthetic data only until Phase C
 - **Never commit to `main`, ever,** from any agent or from Sam's own sessions. Each piece of work gets `git checkout -b <type>/<slug>` (`feat/`, `fix/`, `chore/`, `docs/`) and lands via PR. One logical change per branch. Parallel work uses git worktrees, which branch automatically. Stop and tell Sam the branch is ready; never self-merge unless Sam says so in that turn.
 - **Commit after every coherent chunk**, small and described by why. Commits are rollback points and Sam's review surface.
 - **Update `PROGRESS.md`** after every commit or milestone.
+- **Adding a dependency is a decision, not a convenience.** Before adding any npm package, check on the registry: weekly downloads, maintainers (any recent change), install scripts, last publish date, and how many packages it pulls in. Prefer existing dependencies or a few lines of code. State the checks in the PR description. A package with fewer than 100 weekly downloads, an unexpected install script, or a name close to a popular package is a stop-and-ask item. See `audit-prompts/15-supply-chain.md`.
 - **Two-pass UI:** the feature pass ships a plain, unstyled-but-functional UI so the flow can be verified. A separate restyle pass applies `DESIGN.md` afterward. Don't mix them in one PR.
 - **Stop and ask Sam directly (don't guess)** for each of:
   - Anything that would put real client data, real names of children, or PHI into any system, fixture, log, prompt, or env (synthetic only until Phase C).
