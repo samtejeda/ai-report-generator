@@ -3,7 +3,6 @@ import { parseEnv } from "./env";
 
 const valid = {
   DATABASE_URL: "postgresql://user:pw@host-pooler.example.com/db",
-  DATABASE_URL_UNPOOLED: "postgresql://user:pw@host.example.com/db",
 };
 
 describe("parseEnv", () => {
@@ -14,7 +13,15 @@ describe("parseEnv", () => {
   });
 
   it("names the missing variable", () => {
-    expect(() => parseEnv({ DATABASE_URL_UNPOOLED: valid.DATABASE_URL_UNPOOLED })).toThrow(/DATABASE_URL:/);
+    expect(() => parseEnv({})).toThrow(/DATABASE_URL:/);
+  });
+
+  it("does not require or expose the owner (unpooled) connection string", () => {
+    // Checklist 15 item 5: only drizzle.config.ts reads DATABASE_URL_UNPOOLED.
+    const unpooled = "postgresql://owner:ownerpw@host.example.com/db";
+    const env = parseEnv({ ...valid, DATABASE_URL_UNPOOLED: unpooled });
+    expect(env).not.toHaveProperty("DATABASE_URL_UNPOOLED");
+    expect(JSON.stringify(env)).not.toContain("ownerpw");
   });
 
   it("never echoes a bad value back", () => {

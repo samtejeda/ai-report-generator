@@ -46,7 +46,8 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          # Placeholders so env validation passes. Not real; nothing connects.
+          # Placeholder so env validation passes. Not real; nothing connects.
+          # Only the runtime variable: the owner URL (DATABASE_URL_UNPOOLED) is not
+          # part of the app's env schema and CI never needs it.
           DATABASE_URL: postgresql://u:p@h/d
-          DATABASE_URL_UNPOOLED: postgresql://u:p@h/d
           NEXT_TELEMETRY_DISABLED: "1"
