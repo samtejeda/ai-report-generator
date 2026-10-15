@@ -63,6 +63,16 @@ Source of truth for project state. Update after every commit or milestone. Conve
 
 - Decided (Sam, 2026-10-15): auth provider is **self-hosted Better Auth** (approved, including adding the `better-auth` dependency). Password hashing stays at Better Auth's default **scrypt**; `CLAUDE.md` and checklist 03 item 1 say bcrypt, so both are to be reworded in the PR that adds the provider (scrypt is memory-hard; no extra dependency). Session lifetime not yet answered: the plan proposes values for Sam to confirm.
 
+- Decided (Sam, 2026-10-15), auth plan answers:
+  - Sessions: **2 hours** (interpreted by Claude as the idle timeout; **unconfirmed** whether Sam meant idle or absolute). Claude's working defaults, to be corrected if wrong: idle 2 h, absolute maximum 12 h (checked in `requireSession`, since Better Auth may not enforce an absolute limit: **unverified**), fresh-password window 5 min for sensitive actions.
+  - Two database roles: `app_runtime` for feature code, new `auth_runtime` (own login role, `AUTH_DATABASE_URL`) for Better Auth only; `app_runtime` gets no access to credential/session/verification tables. Approved.
+  - Failed logins for an unknown email go to application logs only (no email recorded), not `audit_log`; failures for a known user are audited. Approved.
+  - Email uniqueness becomes global (replaces per-org `users_org_email_active_uq`). Approved.
+  - Minimal read-only `GET /api/clients` and `/api/clients/{id}` in the authorization PR as the proving ground. Approved.
+  - Owner bootstrap script is a named, local-only exception to the "`DATABASE_URL_UNPOOLED` for drizzle-kit only" rule. Approved.
+  - **MFA is required** (Sam, "must be a must"; supersedes the plan's "MFA not in this plan"). Better Auth's `twoFactor` plugin ships inside `better-auth` (export `better-auth/plugins/two-factor`; no new package). Claude's proposal, awaiting Sam's confirmation of the trusted-device point: TOTP enrollment mandatory for all three roles at first sign-in (server-side gate in `requireSession`); a code at every new session; backup codes shown once; no "trust this device" at launch (the plugin's trusted-device window is 30 days, refreshed on each sign-in); a lost device is recovered by an owner-run, audited MFA reset, and an owner who loses everything uses a documented break-glass step in `docs/RUNBOOK.md`. Unverified: how TOTP secrets and backup codes are stored (encrypted or hashed) in the plugin's table.
+  - Build sequence is now: (1) `feat/auth-rls`, (2) `feat/auth-core`, (3) `feat/auth-mfa`, (4) `feat/auth-authz`, (5) `feat/auth-admin`. This `feat/auth` branch carries only the docs commits.
+
 ### Auth plan must answer (left open by the data model)
 
 `users` in `lib/db/schema/users.ts` is a minimal, marked extension point (no `password_hash`, no sessions).
@@ -197,6 +207,8 @@ Single home for anything gated on a later condition. Do not bury these in dated 
 
 ## Blocked on Sam
 
+- `feat/auth-rls` spike (2026-10-15): this worktree has no `.env.test.local` (gitignored, lives in the main checkout), so the RLS spike cannot run against the Neon `test` branch. Needs that file copied into this worktree (`TEST_DATABASE_URL`, `TEST_DATABASE_URL_UNPOOLED`, `TEST_APP_ROLE_PASSWORD`). Claude did not read it from the main checkout.
+- Confirm the MFA proposal (no trusted devices at launch) and whether "2 hours" meant idle or absolute session length (see "Auth decisions").
 - Review the `feat/data-model` PR and sign off the final schema (14 tables, migrations `0001`-`0003`). Nothing has been applied to Neon `dev` (still only `0000_enable_pgvector`). After sign-off: run `npm run db:migrate` against `dev` (one command, owner role), then create the app login role with SQL per `docs/RUNBOOK.md` and point `DATABASE_URL` at it.
 - Confirm the **assumptions** logged under "Decisions & assumptions" dated 2026-10-13 (defaults for `organizations.type`, retention column unenforced, audit rows kept after purge, text+CHECK instead of enums, `app_runtime` keeps DELETE on RAG/jobs tables).
 - Legal/policy (not blocking this PR): how long purged client data may persist in Neon history/backups, and how long `audit_log` rows are kept after a purge.
