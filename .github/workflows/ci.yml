@@ -28,7 +28,23 @@ jobs:
           node-version: 24
           cache: npm
 
+      # Supply-chain guards (audit 15). The two static checks run BEFORE npm ci so a bad
+      # lockfile fails before any package's install script has executed. `npm ci` itself
+      # verifies every package against the lockfile hash, so there is no separate hash check.
+      - name: Lockfile sources (registry.npmjs.org only, integrity hashes present)
+        run: node scripts/ci/check-lockfile-registry.mjs
+
+      - name: Install-script allowlist (lockfile flags, before install)
+        run: node scripts/ci/check-install-scripts.mjs lockfile
+
       - run: npm ci
+
+      # Catches a lockfile whose hasInstallScript flag does not match the real package.
+      - name: Install-script allowlist (installed packages)
+        run: node scripts/ci/check-install-scripts.mjs installed
+
+      - name: Registry signatures
+        run: npm audit signatures
 
       - name: Lint
         run: npm run lint
@@ -46,7 +62,33 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          # Placeholders so env validation passes. Not real; nothing connects.
+          # Placeholder so env validation passes. Not real; nothing connects.
+          # Only the runtime variable: the owner URL (DATABASE_URL_UNPOOLED) is not
+          # part of the app's env schema and CI never needs it.
           DATABASE_URL: postgresql://u:p@h/d
-          DATABASE_URL_UNPOOLED: postgresql://u:p@h/d
           NEXT_TELEMETRY_DISABLED: "1"
+
+  # Reports added, removed and changed packages on the PR and fails on newly introduced
+  # high-severity advisories. A separate job so the required `checks` job keeps its
+  # read-only permissions. A required status check on `main` (approved by Sam 2026-10-15).
+  dependency-review:
+    name: dependency-review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write # only to post the summary comment
+    steps:
+      # This action publishes exact release tags only (no floating v5 tag); Dependabot bumps it.
+      - uses: actions/dependency-review-action@v5.0.0
+        with:
+          fail-on-severity: high
+          # Default is runtime only; build tooling runs in CI and on developer machines too.
+          fail-on-scopes: runtime, development
+          # Recorded decision (PROGRESS.md, "npm audit decisions"): braces has no patched release
+          # and is reachable only from dev tooling. Without this, any PR that changes how braces
+          # appears in the lockfile (for example a scope change) re-fails on it. Allow this ONE
+          # advisory by ID; every other high advisory still fails. Remove when braces is patched.
+          allow-ghsas: GHSA-vfj7-8cjw-p6xm
+          comment-summary-in-pr: always

@@ -5,11 +5,13 @@ const postgresUrl = z
   .min(1)
   .refine((v) => /^postgres(ql)?:\/\//.test(v), "must be a postgres:// URL");
 
+// The app's runtime variables, and nothing else. DATABASE_URL_UNPOOLED (owner
+// credential, DDL-capable) is deliberately NOT here: only drizzle.config.ts reads
+// it, so a deployed environment never needs to hold it (checklist 15 item 5).
 const schema = z.object({
-  // Pooled Neon connection string: the only one app code may use.
+  // Pooled Neon connection string, via the app_runtime login role: the only
+  // database URL app code may use.
   DATABASE_URL: postgresUrl,
-  // Direct connection: drizzle-kit migrations only, never imported by app code.
-  DATABASE_URL_UNPOOLED: postgresUrl,
   INFERENCE_MODE: z.enum(["stub", "real"]).default("stub"),
   OLLAMA_BASE_URL: z.url().default("http://localhost:11434/v1"),
 });

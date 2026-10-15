@@ -1,0 +1,14 @@
+{
+  "_about": "Packages allowed to run install scripts during `npm ci`. Enforced by scripts/ci/check-install-scripts.mjs (before and after install). Keyed by package name, so a new VERSION of a listed package stays allowed; a new PACKAGE with an install script fails CI until it is added here with a reason, in the same PR, and recorded in PROGRESS.md. Reasons were verified against the published package.json and script files on 2026-10-15.",
+  "packages": {
+    "esbuild": {
+      "reason": "postinstall `node install.js` checks that the platform-specific binary (the @esbuild/* optional package) is present and, if optional dependencies were skipped, downloads that binary tarball from registry.npmjs.org. Three versions, all dev-only: 0.28.2 via tsx, 0.25.12 via drizzle-kit, 0.18.20 via @esbuild-kit/core-utils (drizzle-kit). Widely used; maintained by the esbuild project."
+    },
+    "fsevents": {
+      "reason": "install `node-gyp rebuild` builds the macOS-only native file-watcher addon. Optional dependency with os=darwin (via tsx and vite), so it is never installed on Linux CI or Vercel. Dev-only."
+    },
+    "unrs-resolver": {
+      "reason": "postinstall `node postinstall.js` calls napi-postinstall (itself in the lockfile, with no install script) to check or prepare the platform-specific native binding. Dev-only: used by eslint-config-next's TypeScript import resolver."
+    }
+  }
+}
