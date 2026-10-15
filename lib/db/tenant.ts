@@ -9,13 +9,20 @@ import * as s from "./schema";
  * Tenant-scoped data access. Feature code gets its data ONLY through `tenantDb(ctx)`;
  * a lint rule forbids importing the raw `getDb()` outside lib/db and the health route.
  *
- * What makes it impossible to omit organization_id:
- * - every read and write adds `organization_id = ctx.organizationId` itself;
- * - inserts inject the org id and reject a caller-supplied one;
- * - updates cannot touch id / organization_id / created_at;
- * - tables without an organization_id column are not accepted by the types;
- * - insert-only tables (methodology_prompts, report_versions, audit_log) have no
- *   update or delete method at all, and the database forbids them anyway (migration 0003).
+ * Two independent layers keep tenants apart (audit 04 item 1):
+ *
+ * 1. Query guard (this file). What makes it impossible to omit organization_id:
+ *    - every read and write adds `organization_id = ctx.organizationId` itself;
+ *    - inserts inject the org id and reject a caller-supplied one;
+ *    - updates cannot touch id / organization_id / created_at;
+ *    - tables without an organization_id column are not accepted by the types;
+ *    - insert-only tables (methodology_prompts, report_versions, audit_log) have no
+ *      update or delete method at all, and the database forbids them anyway (0003).
+ *
+ * 2. Row-level security (migration 0004). Every operation runs inside a transaction that
+ *    first sets `app.organization_id` for that transaction only. Policies on every tenant
+ *    table match organization_id against it, so even a query that forgot its filter, or
+ *    raw SQL, sees and changes only this tenant's rows. With no setting, nothing matches.
  *
  * The context must come from the server-side session, never from request input.
  */
@@ -98,7 +105,40 @@ export function tenantDb(ctx: TenantContext, db: Db = getDb()) {
     return and(...predicates) as SQL;
   }
 
-  function core(exec: Db) {
+  /**
+   * Tells Postgres which tenant this transaction is for. The third argument (true) makes
+   * the setting local to the transaction, so it can never leak to the next request that
+   * reuses the pooled connection. The id is bound as a parameter and was validated above.
+   */
+  async function bindTenant(tx: Db): Promise<void> {
+    await tx.execute(sql`select set_config('app.organization_id', ${orgId}, true)`);
+  }
+
+  /** Runs `work` in its own transaction with the tenant bound before anything else. */
+  function inTenantTransaction<R>(work: (tx: Db) => PromiseLike<R>): Promise<R> {
+    return db.transaction(async (tx) => {
+      const bound = tx as unknown as Db;
+      await bindTenant(bound);
+      return work(bound);
+    });
+  }
+
+  /**
+   * `standalone`: each operation opens its own tenant transaction when awaited.
+   * Otherwise `exec` is already a tenant-bound transaction (from `transaction()`).
+   */
+  function core(exec: Db, standalone: boolean) {
+    function run<R>(build: (e: Db) => TenantQuery<R>): TenantQuery<R> {
+      if (!standalone) return build(exec);
+      // Building a query sends nothing; it is only executed when awaited.
+      const preview = build(exec);
+      const query: TenantQuery<R> = {
+        toSQL: () => preview.toSQL(),
+        then: (onFulfilled, onRejected) => inTenantTransaction((tx) => build(tx)).then(onFulfilled, onRejected),
+      };
+      return query;
+    }
+
     return {
       organizationId: orgId,
 
@@ -106,15 +146,17 @@ export function tenantDb(ctx: TenantContext, db: Db = getDb()) {
         if (!Number.isInteger(opts.limit) || opts.limit < 1 || opts.limit > MAX_PAGE_SIZE) {
           throw new Error(`limit must be an integer between 1 and ${MAX_PAGE_SIZE}`);
         }
-        let q = exec
-          .select()
-          .from(table as PgTable)
-          .where(scope(table, [opts.where], opts.includeDeleted))
-          .$dynamic()
-          .limit(opts.limit);
-        if (opts.offset) q = q.offset(opts.offset);
-        if (opts.orderBy) q = q.orderBy(...(Array.isArray(opts.orderBy) ? opts.orderBy : [opts.orderBy]));
-        return q as unknown as TenantQuery<Row<T>[]>;
+        return run((e) => {
+          let q = e
+            .select()
+            .from(table as PgTable)
+            .where(scope(table, [opts.where], opts.includeDeleted))
+            .$dynamic()
+            .limit(opts.limit);
+          if (opts.offset) q = q.offset(opts.offset);
+          if (opts.orderBy) q = q.orderBy(...(Array.isArray(opts.orderBy) ? opts.orderBy : [opts.orderBy]));
+          return q as unknown as TenantQuery<Row<T>[]>;
+        });
       },
 
       /** One row by id within this organization, or undefined (respond 404). */
@@ -134,10 +176,9 @@ export function tenantDb(ctx: TenantContext, db: Db = getDb()) {
           if ("organizationId" in (v as object)) throw new Error("organizationId is set by the tenant helper, not the caller");
           return { ...v, organizationId: orgId };
         });
-        return exec
-          .insert(table as PgTable)
-          .values(rows as never)
-          .returning() as unknown as TenantQuery<Row<T>[]>;
+        return run(
+          (e) => e.insert(table as PgTable).values(rows as never).returning() as unknown as TenantQuery<Row<T>[]>,
+        );
       },
 
       /** Empty result means "not found in this organization" (respond 404). */
@@ -146,33 +187,49 @@ export function tenantDb(ctx: TenantContext, db: Db = getDb()) {
         for (const key of FORBIDDEN_UPDATE_KEYS) {
           if (key in (patch as object)) throw new Error(`${key} cannot be updated`);
         }
-        return exec
-          .update(table as PgTable)
-          .set(patch as never)
-          .where(scope(table, [eq(cols(table).id, id)]))
-          .returning() as unknown as TenantQuery<Row<T>[]>;
+        return run(
+          (e) =>
+            e
+              .update(table as PgTable)
+              .set(patch as never)
+              .where(scope(table, [eq(cols(table).id, id)]))
+              .returning() as unknown as TenantQuery<Row<T>[]>,
+        );
       },
 
       softDelete<T extends SoftDeleteTable>(table: T, id: string): TenantQuery<Row<T>[]> {
         assertUuid(id, "id");
-        return exec
-          .update(table as PgTable)
-          .set({ deletedAt: new Date() } as never)
-          .where(scope(table, [eq(cols(table).id, id)]))
-          .returning() as unknown as TenantQuery<Row<T>[]>;
+        return run(
+          (e) =>
+            e
+              .update(table as PgTable)
+              .set({ deletedAt: new Date() } as never)
+              .where(scope(table, [eq(cols(table).id, id)]))
+              .returning() as unknown as TenantQuery<Row<T>[]>,
+        );
       },
 
       /** Hard delete of derived/regenerable rows only (RAG index, jobs). `where` is required. */
       deleteDerived<T extends DerivedDeletableTable>(table: T, where: SQL): TenantQuery<Row<T>[]> {
-        return exec
-          .delete(table as PgTable)
-          .where(scope(table, [where], true))
-          .returning() as unknown as TenantQuery<Row<T>[]>;
+        return run(
+          (e) =>
+            e
+              .delete(table as PgTable)
+              .where(scope(table, [where], true))
+              .returning() as unknown as TenantQuery<Row<T>[]>,
+        );
       },
 
       /** The caller's own organization row. */
       async organization() {
-        const rows = await exec.select().from(s.organizations).where(eq(s.organizations.id, orgId)).limit(1);
+        const rows = await run(
+          (e) =>
+            e
+              .select()
+              .from(s.organizations)
+              .where(eq(s.organizations.id, orgId))
+              .limit(1) as unknown as TenantQuery<(typeof s.organizations.$inferSelect)[]>,
+        );
         return rows[0];
       },
 
@@ -182,32 +239,37 @@ export function tenantDb(ctx: TenantContext, db: Db = getDb()) {
        * allow-list (audit 04 item 8).
        */
       updateOrganization(patch: Partial<Pick<typeof s.organizations.$inferInsert, "name" | "type" | "state">>) {
-        return exec
-          .update(s.organizations)
-          .set(patch)
-          .where(eq(s.organizations.id, orgId))
-          .returning() as unknown as TenantQuery<(typeof s.organizations.$inferSelect)[]>;
+        return run(
+          (e) =>
+            e
+              .update(s.organizations)
+              .set(patch)
+              .where(eq(s.organizations.id, orgId))
+              .returning() as unknown as TenantQuery<(typeof s.organizations.$inferSelect)[]>,
+        );
       },
 
       /**
        * HARD DELETE of a client and everything derived from it, via the purge_client()
        * database function. Not wired to any route. Calling it on anything but synthetic
        * data needs Sam's explicit approval. Returns row counts only; the caller writes
-       * the audit event.
+       * the audit event. The function itself refuses an organization other than the one
+       * this transaction is bound to (migration 0004).
        */
       async purgeClient(clientId: string): Promise<PurgeResult> {
         assertUuid(clientId, "clientId");
-        const result = await exec.execute(sql`select purge_client(${orgId}::uuid, ${clientId}::uuid) as result`);
+        const call = (e: Db) => e.execute(sql`select purge_client(${orgId}::uuid, ${clientId}::uuid) as result`);
+        const result = standalone ? await inTenantTransaction(call) : await call(exec);
         return purgeResultSchema.parse((result.rows[0] as { result: unknown }).result);
       },
     };
   }
 
   return {
-    ...core(db),
-    /** Runs `fn` in one transaction; the handle passed in is tenant-scoped the same way. */
+    ...core(db, true),
+    /** Runs `fn` in one transaction; the handle passed in is tenant-bound the same way. */
     transaction<R>(fn: (t: ReturnType<typeof core>) => Promise<R>): Promise<R> {
-      return db.transaction((tx) => fn(core(tx as unknown as Db)));
+      return inTenantTransaction((tx) => fn(core(tx, false)));
     },
   };
 }

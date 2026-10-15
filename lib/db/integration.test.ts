@@ -1,9 +1,9 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { eq, sql } from "drizzle-orm";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { eq, getTableName, sql } from "drizzle-orm";
 import { Pool } from "@neondatabase/serverless";
 import { drizzle, type NeonDatabase } from "drizzle-orm/neon-serverless";
 import * as schema from "./schema";
-import { tenantDb } from "./tenant";
+import { TENANT_TABLES, tenantDb } from "./tenant";
 
 // Integration tests against a scratch Neon branch (D7: the `test` branch of the dev
 // project). They need TEST_* variables from .env.test.local (gitignored) and are skipped
@@ -14,6 +14,10 @@ import { tenantDb } from "./tenant";
 try {
   process.loadEnvFile(".env.test.local");
 } catch {}
+
+// These tests talk to Neon over the internet and every tenantDb call is a transaction, so
+// the 5 s default makes them flaky on a slow connection. This file only; unit tests keep 5 s.
+vi.setConfig({ testTimeout: 30_000 });
 
 const OWNER_URL = process.env.TEST_DATABASE_URL;
 const APP_PASSWORD = process.env.TEST_APP_ROLE_PASSWORD;
@@ -54,11 +58,26 @@ function vec(hot: number): number[] {
   return Array.from({ length: 768 }, (_, i) => (i === hot ? 1 : 0));
 }
 
+type AppDb = NeonDatabase<typeof schema>;
+
+// Every table the registry says is tenant data, plus organizations (its id is the tenant).
+const TENANT_TABLE_NAMES = [...TENANT_TABLES.map((t) => getTableName(t)), "organizations"];
+const INVALID_TEXT_REPRESENTATION = "22P02";
+
 describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
   let ownerPool: Pool;
   let appPool: Pool;
+  let appConnectionString = "";
   let owner: NeonDatabase<typeof schema>; // table owner: fixtures + trigger checks
   let app: NeonDatabase<typeof schema>; // app_runtime member: what production uses
+
+  // Raw SQL as the app role, inside a transaction bound to one tenant exactly as tenantDb
+  // does it. Used where a test needs to send statements tenantDb deliberately cannot.
+  const asOrg = <R>(orgId: string, fn: (tx: AppDb) => Promise<R>): Promise<R> =>
+    app.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('app.organization_id', ${orgId}, true)`);
+      return fn(tx as unknown as AppDb);
+    });
 
   type Fx = {
     orgId: string;
@@ -75,31 +94,34 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
   };
 
   async function seedClientSubtree(orgId: string, userId: string, templateId: string, promptId: string, label: string) {
-    const t = tenantDb({ organizationId: orgId }, owner);
-    const [client] = await t.insert(schema.clients, { displayName: `Synthetic ${label}` });
-    const [report] = await t.insert(schema.reports, {
-      clientId: client.id,
-      templateId,
-      methodologyPromptId: promptId,
-      createdByUserId: userId,
+    // One transaction for the whole subtree: each tenantDb call on its own is a transaction
+    // with a tenant-binding round trip, which makes large fixtures slow.
+    return tenantDb({ organizationId: orgId }, owner).transaction(async (t) => {
+      const [client] = await t.insert(schema.clients, { displayName: `Synthetic ${label}` });
+      const [report] = await t.insert(schema.reports, {
+        clientId: client.id,
+        templateId,
+        methodologyPromptId: promptId,
+        createdByUserId: userId,
+      });
+      const [section] = await t.insert(schema.reportSections, {
+        reportId: report.id,
+        sectionKey: "summary",
+        sectionType: "prose",
+        position: 1,
+      });
+      await t.insert(schema.reportVersions, [
+        { reportId: report.id, sectionId: section.id, versionNumber: 1, editType: "ai_generated", content: { text: "synthetic" } },
+        { reportId: report.id, sectionId: section.id, versionNumber: 2, editType: "human_edit", content: { text: "synthetic edit" }, createdByUserId: userId },
+      ]);
+      await t.insert(schema.clientHistory, { clientId: client.id, entryType: "note", occurredOn: "2026-01-01", summary: "synthetic", createdByUserId: userId });
+      const [doc] = await t.insert(schema.ragDocuments, { clientId: client.id, sourceType: "client_note", title: "synthetic note" });
+      const [chunk] = await t.insert(schema.ragChunks, { documentId: doc.id, chunkIndex: 0, content: "synthetic chunk" });
+      await t.insert(schema.ragEmbeddings, { chunkId: chunk.id, model: "test-model", embedding: vec(1) });
+      await t.insert(schema.jobs, { type: "synthetic", resourceType: "report", resourceId: report.id });
+      await t.insert(schema.auditLog, { action: "client.read", resourceType: "client", resourceId: client.id });
+      return { clientId: client.id, reportId: report.id, sectionId: section.id, docId: doc.id, chunkId: chunk.id };
     });
-    const [section] = await t.insert(schema.reportSections, {
-      reportId: report.id,
-      sectionKey: "summary",
-      sectionType: "prose",
-      position: 1,
-    });
-    await t.insert(schema.reportVersions, [
-      { reportId: report.id, sectionId: section.id, versionNumber: 1, editType: "ai_generated", content: { text: "synthetic" } },
-      { reportId: report.id, sectionId: section.id, versionNumber: 2, editType: "human_edit", content: { text: "synthetic edit" }, createdByUserId: userId },
-    ]);
-    await t.insert(schema.clientHistory, { clientId: client.id, entryType: "note", occurredOn: "2026-01-01", summary: "synthetic", createdByUserId: userId });
-    const [doc] = await t.insert(schema.ragDocuments, { clientId: client.id, sourceType: "client_note", title: "synthetic note" });
-    const [chunk] = await t.insert(schema.ragChunks, { documentId: doc.id, chunkIndex: 0, content: "synthetic chunk" });
-    await t.insert(schema.ragEmbeddings, { chunkId: chunk.id, model: "test-model", embedding: vec(1) });
-    await t.insert(schema.jobs, { type: "synthetic", resourceType: "report", resourceId: report.id });
-    await t.insert(schema.auditLog, { action: "client.read", resourceType: "client", resourceId: client.id });
-    return { clientId: client.id, reportId: report.id, sectionId: section.id, docId: doc.id, chunkId: chunk.id };
   }
 
   async function seedOrg(label: string): Promise<Fx> {
@@ -139,7 +161,8 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
     const appUrl = new URL(OWNER_URL!);
     appUrl.username = APP_ROLE;
     appUrl.password = APP_PASSWORD!;
-    appPool = new Pool({ connectionString: appUrl.toString() });
+    appConnectionString = appUrl.toString();
+    appPool = new Pool({ connectionString: appConnectionString });
     app = drizzle(appPool, { schema });
 
     A = await seedOrg("A");
@@ -213,8 +236,141 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
     });
 
     it("organization_id cannot be changed on an existing row, even with raw SQL", async () => {
-      await expectPgError(app.execute(sql`update clients set organization_id = ${B.orgId} where id = ${A.clientId}`), RESTRICT_VIOLATION);
+      await expectPgError(
+        asOrg(A.orgId, (tx) => tx.execute(sql`update clients set organization_id = ${B.orgId} where id = ${A.clientId}`)),
+        RESTRICT_VIOLATION,
+      );
       await expectPgError(owner.execute(sql`update clients set organization_id = ${B.orgId} where id = ${A.clientId}`), RESTRICT_VIOLATION);
+    });
+  });
+
+  describe("row-level security (audit 04 item 1; migration 0004)", () => {
+    const rowCount = async (table: string, where = "") =>
+      Number((await owner.execute(sql.raw(`select count(*)::int as n from "${table}" ${where}`))).rows[0].n);
+
+    it("the database and the registry agree: every table with organization_id has RLS on and a policy for app_runtime", async () => {
+      const r = await owner.execute(sql`
+        select c.relname::text as name, c.relrowsecurity as rls,
+               exists (select 1 from pg_policies p where p.schemaname = 'public' and p.tablename = c.relname and 'app_runtime' = any (p.roles)) as has_policy
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'public' and c.relkind = 'r'
+          and (c.relname = 'organizations'
+               or exists (select 1 from information_schema.columns col
+                          where col.table_schema = 'public' and col.table_name = c.relname and col.column_name = 'organization_id'))`);
+      const rows = r.rows as { name: string; rls: boolean; has_policy: boolean }[];
+      expect(rows.map((x) => x.name).sort()).toEqual([...TENANT_TABLE_NAMES].sort());
+      for (const row of rows) {
+        expect(row.rls, `${row.name}: RLS enabled`).toBe(true);
+        expect(row.has_policy, `${row.name}: policy for app_runtime`).toBe(true);
+      }
+    });
+
+    it.each(TENANT_TABLE_NAMES)("%s: raw SQL with no filter shows A only A's rows, B only B's, and no tenant nothing", async (name) => {
+      const count = (where = "") => sql.raw(`select count(*)::int as n from "${name}" ${where}`);
+      const asA = (where?: string) => asOrg(A.orgId, (tx) => tx.execute(count(where))).then((r) => Number(r.rows[0].n));
+      const asB = (where?: string) => asOrg(B.orgId, (tx) => tx.execute(count(where))).then((r) => Number(r.rows[0].n));
+      const other = (id: string) => (name === "organizations" ? `where id <> '${id}'` : `where organization_id <> '${id}'`);
+
+      expect(await asA(), `${name}: A sees its own rows`).toBeGreaterThan(0);
+      expect(await asA(other(A.orgId)), `${name}: A sees none of B's`).toBe(0);
+      expect(await asB(), `${name}: B sees its own rows`).toBeGreaterThan(0);
+      expect(await asB(other(B.orgId)), `${name}: B sees none of A's`).toBe(0);
+      // No tenant bound: fails closed even though the role has SELECT.
+      expect(Number((await app.execute(count())).rows[0].n), `${name}: nothing without a tenant`).toBe(0);
+    });
+
+    it.each(TENANT_TABLE_NAMES)("%s: org A cannot update or delete org B's rows, even with raw SQL", async (name) => {
+      const priv = await owner.execute(
+        sql`select has_table_privilege(${APP_ROLE}, ${name}, 'UPDATE') as u, has_table_privilege(${APP_ROLE}, ${name}, 'DELETE') as d`,
+      );
+      const { u, d } = priv.rows[0] as { u: boolean; d: boolean };
+      const key = name === "organizations" ? "id" : "organization_id";
+      const before = await rowCount(name, `where ${key} = '${B.orgId}'`);
+      expect(before, `${name}: org B has fixture rows`).toBeGreaterThan(0);
+
+      if (u) {
+        const r = await asOrg(A.orgId, (tx) => tx.execute(sql.raw(`update "${name}" set ${key} = ${key} where ${key} = '${B.orgId}'`)));
+        expect(r.rowCount, `${name}: update touched B rows`).toBe(0);
+      }
+      if (d) {
+        const r = await asOrg(A.orgId, (tx) => tx.execute(sql.raw(`delete from "${name}" where ${key} = '${B.orgId}'`)));
+        expect(r.rowCount, `${name}: delete touched B rows`).toBe(0);
+      }
+      expect(await rowCount(name, `where ${key} = '${B.orgId}'`), `${name}: B's rows unchanged`).toBe(before);
+    });
+
+    it("org A cannot insert rows for org B, even with raw SQL; the same statement for A works", async () => {
+      await expectPgError(
+        asOrg(A.orgId, (tx) => tx.execute(sql`insert into clients (organization_id, display_name) values (${B.orgId}, 'cross-tenant')`)),
+        INSUFFICIENT_PRIVILEGE,
+      );
+      await expectPgError(
+        asOrg(A.orgId, (tx) => tx.execute(sql`insert into audit_log (organization_id, action, resource_type) values (${B.orgId}, 'forged', 'client')`)),
+        INSUFFICIENT_PRIVILEGE,
+      );
+      const ok = await asOrg(A.orgId, (tx) => tx.execute(sql`insert into clients (organization_id, display_name) values (${A.orgId}, 'own tenant control') returning id`));
+      expect(ok.rows).toHaveLength(1);
+    });
+
+    it("organizations: a tenant sees only its own row and cannot rename another", async () => {
+      const seen = await asOrg(A.orgId, (tx) => tx.execute(sql`select id from organizations`));
+      expect(seen.rows.map((r) => r.id)).toEqual([A.orgId]);
+      const r = await asOrg(A.orgId, (tx) => tx.execute(sql`update organizations set name = 'HIJACKED' where id = ${B.orgId}`));
+      expect(r.rowCount).toBe(0);
+      expect((await tB.organization())?.name).not.toBe("HIJACKED");
+      expect((await tA.organization())?.id).toBe(A.orgId);
+    });
+
+    it("a setting that is not a UUID makes the query error instead of matching anything", async () => {
+      await expectPgError(asOrg("not-a-uuid", (tx) => tx.execute(sql`select count(*) from clients`)), INVALID_TEXT_REPRESENTATION);
+    });
+
+    it("a pooled connection reused by the next request carries no tenant (commit and rollback)", async () => {
+      const solo = new Pool({ connectionString: appConnectionString, max: 1 }); // forces the same connection
+      try {
+        const db = drizzle(solo, { schema });
+        const bound = await db.transaction(async (tx) => {
+          await tx.execute(sql`select set_config('app.organization_id', ${A.orgId}, true)`);
+          return Number((await tx.execute(sql`select count(*)::int as n from clients`)).rows[0].n);
+        });
+        expect(bound).toBeGreaterThan(0);
+        expect(Number((await db.execute(sql`select count(*)::int as n from clients`)).rows[0].n)).toBe(0);
+
+        await expectPgError(
+          db.transaction(async (tx) => {
+            await tx.execute(sql`select set_config('app.organization_id', ${A.orgId}, true)`);
+            await tx.execute(sql`select 1/0`);
+          }),
+          "22012",
+        );
+        expect(Number((await db.execute(sql`select count(*)::int as n from clients`)).rows[0].n)).toBe(0);
+        const leftover = await db.execute(sql`select current_setting('app.organization_id', true) as v`);
+        expect([null, ""]).toContain(leftover.rows[0].v);
+      } finally {
+        await solo.end();
+      }
+    });
+
+    it("concurrent requests for different tenants never see each other's rows", async () => {
+      const results = await Promise.all(
+        Array.from({ length: 40 }, (_, i) => {
+          const orgId = i % 2 ? A.orgId : B.orgId;
+          return (i % 2 ? tA : tB).find(schema.clients, { limit: 50 }).then((rows) => ({ orgId, rows }));
+        }),
+      );
+      for (const { orgId, rows } of results) {
+        expect(rows.length).toBeGreaterThan(0);
+        expect(rows.every((c) => c.organizationId === orgId)).toBe(true);
+      }
+    });
+
+    it("purge_client refuses an organization other than the session tenant (it bypasses RLS, so it checks itself)", async () => {
+      await expectPgError(
+        asOrg(A.orgId, (tx) => tx.execute(sql`select purge_client(${B.orgId}::uuid, ${B.clientId}::uuid)`)),
+        INSUFFICIENT_PRIVILEGE,
+      );
+      await expectPgError(app.execute(sql`select purge_client(${B.orgId}::uuid, ${B.clientId}::uuid)`), INSUFFICIENT_PRIVILEGE);
+      expect(await rowCount("clients", `where id = '${B.clientId}'`)).toBe(1);
     });
   });
 
@@ -337,7 +493,9 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
       expect(String(idx.rows[0]?.indexdef)).toMatch(/hnsw.*vector_cosine_ops/);
       // Org B holds an identical vector for its own chunk; a search scoped to A must only see A's.
       const q = `[${vec(1).join(",")}]`;
-      const hitsA = await app.execute(sql`select organization_id from rag_embeddings where organization_id = ${A.orgId} order by embedding <=> ${q}::vector limit 5`);
+      const hitsA = await asOrg(A.orgId, (tx) =>
+        tx.execute(sql`select organization_id from rag_embeddings where organization_id = ${A.orgId} order by embedding <=> ${q}::vector limit 5`),
+      );
       expect(hitsA.rows.length).toBeGreaterThan(0);
       expect(hitsA.rows.every((r) => r.organization_id === A.orgId)).toBe(true);
     });

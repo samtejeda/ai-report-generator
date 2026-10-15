@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { getTableName, is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
@@ -170,5 +171,34 @@ describe("constraints and indexes", () => {
   it("each template version number is unique", () => {
     const uq = byName("methodology_prompts").uniqueConstraints.map((u) => u.columns.map((col) => col.name).join(","));
     expect(uq).toContain("template_id,version_number");
+  });
+});
+
+describe("row-level security is declared for every tenant table (audit 04 item 1)", () => {
+  // No database needed: read the committed migrations. A new table with organization_id
+  // that forgets its policy fails here in CI, before it can ship.
+  const migrationSql = readdirSync("drizzle")
+    .filter((f) => f.endsWith(".sql"))
+    .sort()
+    .map((f) => readFileSync(`drizzle/${f}`, "utf8"))
+    .join("\n");
+  const needsRls = configs.filter((c) => c.name === "organizations" || c.columns.some((col) => col.name === "organization_id"));
+
+  it("covers the whole registry plus organizations", () => {
+    expect(needsRls.map((c) => c.name).sort()).toEqual(["organizations", ...TENANT_TABLES.map((t) => getTableName(t))].sort());
+  });
+
+  it.each(needsRls.map((c) => [c.name] as const))("%s has RLS enabled and a policy for app_runtime", (name) => {
+    expect(migrationSql).toContain(`ALTER TABLE "${name}" ENABLE ROW LEVEL SECURITY`);
+    expect(migrationSql).toMatch(new RegExp(`CREATE POLICY "tenant_isolation" ON "${name}" AS PERMISSIVE FOR ALL TO app_runtime`));
+  });
+
+  it("policies fail closed: they compare against the transaction setting, never a constant", () => {
+    const policies = migrationSql.match(/CREATE POLICY[\s\S]*?;\n/g) ?? [];
+    expect(policies.length).toBe(needsRls.length);
+    for (const policy of policies) {
+      expect(policy).toContain("(SELECT app_current_org())");
+      expect(policy).not.toMatch(/USING \(true\)/i);
+    }
   });
 });
