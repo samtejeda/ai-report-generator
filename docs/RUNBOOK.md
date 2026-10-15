@@ -38,9 +38,13 @@ CREATE ROLE <login_name> LOGIN PASSWORD '<generated, 32+ hex chars>' IN ROLE app
 
 Then set `DATABASE_URL` (pooled) to that role. Keep `DATABASE_URL_UNPOOLED` on the owner role: it is for drizzle-kit migrations only. Rotate with `ALTER ROLE <login_name> PASSWORD '...'`. Integration tests use `app_runtime_test` on the `test` branch with the password in the gitignored `.env.test.local`.
 
+## Row-level security (migration 0004)
+
+Every tenant table has a policy `tenant_isolation` for `app_runtime`: a row is visible and writable only when its `organization_id` equals `app_current_org()`, which reads `app.organization_id` set by `tenantDb` for the current transaction. With nothing set, no rows match. The table owner (the migration role) is deliberately not forced through the policies, so **the app must never connect as the owner**; if it did, RLS would not protect anything. To check a database by hand: `select relname, relrowsecurity from pg_class where relname in (...)` and `select tablename, roles from pg_policies where schemaname = 'public'` (14 tables, 14 policies). Debugging tip: if a query unexpectedly returns zero rows, the usual cause is a statement run outside `tenantDb` (no tenant bound), not missing data.
+
 ## Hard deletion of a client
 
-`SELECT purge_client(<org_uuid>, <client_uuid>)` (via `tenantDb(ctx).purgeClient(id)`) deletes the client and all derived rows and returns per-table counts; it is not wired to any route and **needs Sam's explicit approval before it touches anything but synthetic data**. `audit_log` is never touched. Purged data persists in Neon history/backups until the retention window passes: a wording question for the privacy lawyer (see PROGRESS pre-launch checklist).
+`SELECT purge_client(<org_uuid>, <client_uuid>)` (via `tenantDb(ctx).purgeClient(id)`; the function refuses an organization other than the transaction's tenant) deletes the client and all derived rows and returns per-table counts; it is not wired to any route and **needs Sam's explicit approval before it touches anything but synthetic data**. `audit_log` is never touched. Purged data persists in Neon history/backups until the retention window passes: a wording question for the privacy lawyer (see PROGRESS pre-launch checklist).
 
 ## Inference endpoint down (Ollama / tunnel)
 
