@@ -61,6 +61,8 @@ Source of truth for project state. Update after every commit or milestone. Conve
 - Decided (Sam, 2026-10-13): the permission matrix draft is approved: owner = full access in the practice (clients, reports, users, settings, audit log read, sets `inference_endpoint` via the allow-listed admin action); associate = assigned clients and reports only; admin = manage users and practice administration, no clinical content unless granted, audit log read without content. Resolves the "Roles/permission matrix" open question.
 - Decided (Sam, 2026-10-13): before any auth code, Claude does a read-only provider comparison (below) and brings a recommendation. Hand-rolled verification/reset flows are out (Sam's reasoning: higher security risk, liability and backend work). Supabase Auth is not adopted: a second vendor and a paid service not in `CLAUDE.md`, against the 2026-10-08 decision to stay on Neon.
 
+- Decided (Sam, 2026-10-15): auth provider is **self-hosted Better Auth** (approved, including adding the `better-auth` dependency). Password hashing stays at Better Auth's default **scrypt**; `CLAUDE.md` and checklist 03 item 1 say bcrypt, so both are to be reworded in the PR that adds the provider (scrypt is memory-hard; no extra dependency). Session lifetime not yet answered: the plan proposes values for Sam to confirm.
+
 ### Auth plan must answer (left open by the data model)
 
 `users` in `lib/db/schema/users.ts` is a minimal, marked extension point (no `password_hash`, no sessions).
