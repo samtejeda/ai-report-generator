@@ -183,7 +183,7 @@ Source of truth for project state. Update after every commit or milestone. Conve
 ### Known issues
 
 - ~~`npm audit --omit=dev` reports 13 (4 moderate, 9 high), all through `braces`/`fast-glob` under `shadcn` ...~~ Superseded 2026-10-15 by the decision table below, which also corrects the count: the full `npm audit` reports 13 (4 moderate, 9 high, 0 critical); `npm audit --omit=dev` reports 7 high (0 moderate), because `shadcn` was a production dependency.
-- Update 2026-10-15 (`chore/shadcn-dev-dependency`): `shadcn` is now a dev dependency, so `npm audit --omit=dev` reports **0 vulnerabilities**. The full audit still lists the same 9 high and 4 moderate findings; the table below stays valid and every row is now reachable only from build, lint or migration tooling, not from the deployed runtime.
+- Update 2026-10-15 (`chore/shadcn-dev-dependency`): `shadcn` is now a dev dependency, so `npm audit --omit=dev` reports **0 vulnerabilities**. The full audit still lists the same 9 high and 4 moderate findings; the table below stays valid and every row is now reachable only from build, lint or migration tooling, not from the deployed runtime. CI consequence: `dependency-review` treats the scope change as `braces@3.0.3` newly added and fails on it, so `.github/workflows/ci.yml` now passes `allow-ghsas: GHSA-vfj7-8cjw-p6xm` (this one advisory only; every other high advisory still fails). Revisit trigger is the same as the `braces` row: delete the line when a patched `braces` exists.
 - **npm audit decisions (checklist 15 item 7; `npm audit` on 2026-10-15: 0 critical, 9 high, 4 moderate; every row has an owner, a reason and a revisit trigger).**
 
   | Finding | Severity | Path | Decision |
