@@ -70,7 +70,7 @@ jobs:
 
   # Reports added, removed and changed packages on the PR and fails on newly introduced
   # high-severity advisories. A separate job so the required `checks` job keeps its
-  # read-only permissions. NOT a required status check until Sam approves that.
+  # read-only permissions. A required status check on `main` (approved by Sam 2026-10-15).
   dependency-review:
     name: dependency-review
     if: github.event_name == 'pull_request'
@@ -86,4 +86,9 @@ jobs:
           fail-on-severity: high
           # Default is runtime only; build tooling runs in CI and on developer machines too.
           fail-on-scopes: runtime, development
+          # Recorded decision (PROGRESS.md, "npm audit decisions"): braces has no patched release
+          # and is reachable only from dev tooling. Without this, any PR that changes how braces
+          # appears in the lockfile (for example a scope change) re-fails on it. Allow this ONE
+          # advisory by ID; every other high advisory still fails. Remove when braces is patched.
+          allow-ghsas: GHSA-vfj7-8cjw-p6xm
           comment-summary-in-pr: always
