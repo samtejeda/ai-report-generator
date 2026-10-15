@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { Pool } from "@neondatabase/serverless";
 import { drizzle, type NeonDatabase } from "drizzle-orm/neon-serverless";
@@ -14,6 +14,10 @@ import { tenantDb } from "./tenant";
 try {
   process.loadEnvFile(".env.test.local");
 } catch {}
+
+// These tests talk to Neon over the internet and every tenantDb call is a transaction, so
+// the 5 s default makes them flaky on a slow connection. This file only; unit tests keep 5 s.
+vi.setConfig({ testTimeout: 30_000 });
 
 const OWNER_URL = process.env.TEST_DATABASE_URL;
 const APP_PASSWORD = process.env.TEST_APP_ROLE_PASSWORD;
@@ -54,11 +58,21 @@ function vec(hot: number): number[] {
   return Array.from({ length: 768 }, (_, i) => (i === hot ? 1 : 0));
 }
 
+type AppDb = NeonDatabase<typeof schema>;
+
 describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
   let ownerPool: Pool;
   let appPool: Pool;
   let owner: NeonDatabase<typeof schema>; // table owner: fixtures + trigger checks
   let app: NeonDatabase<typeof schema>; // app_runtime member: what production uses
+
+  // Raw SQL as the app role, inside a transaction bound to one tenant exactly as tenantDb
+  // does it. Used where a test needs to send statements tenantDb deliberately cannot.
+  const asOrg = <R>(orgId: string, fn: (tx: AppDb) => Promise<R>): Promise<R> =>
+    app.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('app.organization_id', ${orgId}, true)`);
+      return fn(tx as unknown as AppDb);
+    });
 
   type Fx = {
     orgId: string;
@@ -75,31 +89,34 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
   };
 
   async function seedClientSubtree(orgId: string, userId: string, templateId: string, promptId: string, label: string) {
-    const t = tenantDb({ organizationId: orgId }, owner);
-    const [client] = await t.insert(schema.clients, { displayName: `Synthetic ${label}` });
-    const [report] = await t.insert(schema.reports, {
-      clientId: client.id,
-      templateId,
-      methodologyPromptId: promptId,
-      createdByUserId: userId,
+    // One transaction for the whole subtree: each tenantDb call on its own is a transaction
+    // with a tenant-binding round trip, which makes large fixtures slow.
+    return tenantDb({ organizationId: orgId }, owner).transaction(async (t) => {
+      const [client] = await t.insert(schema.clients, { displayName: `Synthetic ${label}` });
+      const [report] = await t.insert(schema.reports, {
+        clientId: client.id,
+        templateId,
+        methodologyPromptId: promptId,
+        createdByUserId: userId,
+      });
+      const [section] = await t.insert(schema.reportSections, {
+        reportId: report.id,
+        sectionKey: "summary",
+        sectionType: "prose",
+        position: 1,
+      });
+      await t.insert(schema.reportVersions, [
+        { reportId: report.id, sectionId: section.id, versionNumber: 1, editType: "ai_generated", content: { text: "synthetic" } },
+        { reportId: report.id, sectionId: section.id, versionNumber: 2, editType: "human_edit", content: { text: "synthetic edit" }, createdByUserId: userId },
+      ]);
+      await t.insert(schema.clientHistory, { clientId: client.id, entryType: "note", occurredOn: "2026-01-01", summary: "synthetic", createdByUserId: userId });
+      const [doc] = await t.insert(schema.ragDocuments, { clientId: client.id, sourceType: "client_note", title: "synthetic note" });
+      const [chunk] = await t.insert(schema.ragChunks, { documentId: doc.id, chunkIndex: 0, content: "synthetic chunk" });
+      await t.insert(schema.ragEmbeddings, { chunkId: chunk.id, model: "test-model", embedding: vec(1) });
+      await t.insert(schema.jobs, { type: "synthetic", resourceType: "report", resourceId: report.id });
+      await t.insert(schema.auditLog, { action: "client.read", resourceType: "client", resourceId: client.id });
+      return { clientId: client.id, reportId: report.id, sectionId: section.id, docId: doc.id, chunkId: chunk.id };
     });
-    const [section] = await t.insert(schema.reportSections, {
-      reportId: report.id,
-      sectionKey: "summary",
-      sectionType: "prose",
-      position: 1,
-    });
-    await t.insert(schema.reportVersions, [
-      { reportId: report.id, sectionId: section.id, versionNumber: 1, editType: "ai_generated", content: { text: "synthetic" } },
-      { reportId: report.id, sectionId: section.id, versionNumber: 2, editType: "human_edit", content: { text: "synthetic edit" }, createdByUserId: userId },
-    ]);
-    await t.insert(schema.clientHistory, { clientId: client.id, entryType: "note", occurredOn: "2026-01-01", summary: "synthetic", createdByUserId: userId });
-    const [doc] = await t.insert(schema.ragDocuments, { clientId: client.id, sourceType: "client_note", title: "synthetic note" });
-    const [chunk] = await t.insert(schema.ragChunks, { documentId: doc.id, chunkIndex: 0, content: "synthetic chunk" });
-    await t.insert(schema.ragEmbeddings, { chunkId: chunk.id, model: "test-model", embedding: vec(1) });
-    await t.insert(schema.jobs, { type: "synthetic", resourceType: "report", resourceId: report.id });
-    await t.insert(schema.auditLog, { action: "client.read", resourceType: "client", resourceId: client.id });
-    return { clientId: client.id, reportId: report.id, sectionId: section.id, docId: doc.id, chunkId: chunk.id };
   }
 
   async function seedOrg(label: string): Promise<Fx> {
@@ -213,7 +230,10 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
     });
 
     it("organization_id cannot be changed on an existing row, even with raw SQL", async () => {
-      await expectPgError(app.execute(sql`update clients set organization_id = ${B.orgId} where id = ${A.clientId}`), RESTRICT_VIOLATION);
+      await expectPgError(
+        asOrg(A.orgId, (tx) => tx.execute(sql`update clients set organization_id = ${B.orgId} where id = ${A.clientId}`)),
+        RESTRICT_VIOLATION,
+      );
       await expectPgError(owner.execute(sql`update clients set organization_id = ${B.orgId} where id = ${A.clientId}`), RESTRICT_VIOLATION);
     });
   });
@@ -337,7 +357,9 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
       expect(String(idx.rows[0]?.indexdef)).toMatch(/hnsw.*vector_cosine_ops/);
       // Org B holds an identical vector for its own chunk; a search scoped to A must only see A's.
       const q = `[${vec(1).join(",")}]`;
-      const hitsA = await app.execute(sql`select organization_id from rag_embeddings where organization_id = ${A.orgId} order by embedding <=> ${q}::vector limit 5`);
+      const hitsA = await asOrg(A.orgId, (tx) =>
+        tx.execute(sql`select organization_id from rag_embeddings where organization_id = ${A.orgId} order by embedding <=> ${q}::vector limit 5`),
+      );
       expect(hitsA.rows.length).toBeGreaterThan(0);
       expect(hitsA.rows.every((r) => r.organization_id === A.orgId)).toBe(true);
     });
