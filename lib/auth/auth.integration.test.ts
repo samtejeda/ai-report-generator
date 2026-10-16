@@ -783,4 +783,47 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
       await expectPgError(app.execute(sql`delete from audit_log where id = ${row.id}`), INSUFFICIENT_PRIVILEGE);
     });
   });
+
+  describe("input handling and CORS (audit 04 items 4, 5)", () => {
+    it.each([
+      ["a non-string email", { email: 12345, password: GOOD_PASSWORD }],
+      ["a missing password", { email: "a@example.test" }],
+      ["a malformed address", { email: "not-an-email", password: GOOD_PASSWORD }],
+      ["an object where a string belongs", { email: { $ne: "" }, password: { $ne: "" } }],
+      ["an over-long password", { email: "a@example.test", password: "x".repeat(5000) }],
+    ])("sign-in rejects %s with a 4xx and no session", async (_name, body) => {
+      const res = await call("/sign-in/email", { body });
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(res.status).toBeLessThan(500);
+      expect(cookieFrom(res)).toBe("");
+    });
+
+    it("SQL metacharacters in the address are data, not SQL: no error, no match, nothing leaked", async () => {
+      const orgId = await seedOrg("sqli");
+      const u = await seedUser(orgId, "sqli");
+      for (const email of [`${u.email}' OR '1'='1`, "x@example.test'; drop table users; --", `%@example.test`]) {
+        const res = await call("/sign-in/email", { body: { email, password: GOOD_PASSWORD } });
+        expect(res.status, email).toBeLessThan(500);
+        expect(cookieFrom(res), email).toBe("");
+      }
+      // The table is intact and the real user still signs in.
+      expect((await signIn(u.email)).res.status).toBe(200);
+    });
+
+    it("the reset endpoint treats a hostile token as an unknown token", async () => {
+      const res = await call("/reset-password", { body: { token: "' OR 1=1 --", newPassword: "a brand new passphrase 99" } });
+      expect(res.status).toBe(400);
+    });
+
+    it("sends no CORS headers: a browser on another origin cannot read these responses", async () => {
+      const orgId = await seedOrg("cors");
+      const u = await seedUser(orgId, "cors");
+      const res = await call("/sign-in/email", { body: { email: u.email, password: GOOD_PASSWORD }, origin: BASE });
+      expect(res.headers.get("access-control-allow-origin")).toBeNull();
+      expect(res.headers.get("access-control-allow-credentials")).toBeNull();
+      const evil = await call("/sign-in/email", { body: { email: u.email, password: GOOD_PASSWORD }, origin: "https://evil.example" });
+      expect(evil.status).toBe(403);
+      expect(evil.headers.get("access-control-allow-origin")).toBeNull();
+    });
+  });
 });
