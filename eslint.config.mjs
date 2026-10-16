@@ -2,9 +2,23 @@ import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
 
+const authDbMessage =
+  "The auth database client (auth_runtime role) is for lib/auth only. Feature code gets identity from requireSession().";
+
 const rawDbMessage =
   "Raw database access bypasses the organization_id guard. Use tenantDb(ctx) from '@/lib/db/tenant'. " +
   "Only lib/db/** and the health route may use the raw client.";
+
+const rawDbPaths = [
+  { name: "@/lib/db", message: rawDbMessage },
+  { name: "@/lib/db/index", message: rawDbMessage },
+  { name: "@neondatabase/serverless", message: rawDbMessage },
+  { name: "drizzle-orm/neon-serverless", message: rawDbMessage },
+  { name: "drizzle-orm/neon-http", message: rawDbMessage },
+];
+// Matches the lib/db directory import (its index) and index files, but not lib/db/tenant or
+// schema. Regexes, because gitignore-style globs cannot re-include children of a matched dir.
+const rawDbPatterns = [{ regex: "(^|/)lib/db(/index)?$|(^|/)db/index$|^(\\.{1,2}/)+db$", message: rawDbMessage }];
 
 // Environment scoping (audit 15 item 5): process.env is read only in these files.
 // Everything else gets configuration through getEnv() in lib/env.ts, so a variable
@@ -15,6 +29,7 @@ const PROCESS_ENV_ALLOWED = [
   "next.config.ts", //                NODE_ENV, for dev-only CSP relaxations
   "instrumentation.ts", //            NEXT_RUNTIME, set by Next itself
   "lib/db/integration.test.ts", //    TEST_DATABASE_URL / TEST_APP_ROLE_PASSWORD (scratch Neon branch, tests only)
+  "lib/auth/auth.integration.test.ts", // same TEST_* variables, for the auth flows
 ];
 const processEnvMessage =
   "Do not read process.env here. Add the variable to the schema in lib/env.ts and call getEnv(). " +
@@ -24,26 +39,30 @@ const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
   // Tenant-isolation guard (audit 04 item 1): feature code must not import the raw DB client.
+  // Only the client itself is restricted: lib/db/tenant and the schema modules stay importable.
+  // (Same block also restricts the auth client, below, so the two rules are one config entry.)
+  // Auth database guard (audit 03/04): the auth_runtime client reads credentials and sessions,
+  // so only lib/auth may import it. Feature code gets identity from requireSession().
   {
     files: ["**/*.{ts,tsx,mjs}"],
-    ignores: ["lib/db/**", "app/api/health/route.ts"],
+    // lib/audit.test.ts builds a drizzle mock to prove a failed audit write never blocks the caller.
+    ignores: ["lib/db/**", "lib/auth/**", "app/api/health/route.ts", "lib/audit.test.ts"],
     rules: {
       "no-restricted-imports": [
         "error",
         {
-          paths: [
-            { name: "@/lib/db", message: rawDbMessage },
-            { name: "@/lib/db/index", message: rawDbMessage },
-            { name: "@neondatabase/serverless", message: rawDbMessage },
-            { name: "drizzle-orm/neon-serverless", message: rawDbMessage },
-            { name: "drizzle-orm/neon-http", message: rawDbMessage },
-          ],
-          patterns: [
-            { group: ["**/lib/db", "**/lib/db/index", "**/db/index"], message: rawDbMessage },
-          ],
+          paths: [...rawDbPaths, { name: "@/lib/db/auth-db", message: authDbMessage }],
+          patterns: [...rawDbPatterns, { regex: "(^|/)db/auth-db$", message: authDbMessage }],
         },
       ],
     },
+  },
+  // lib/auth may use the auth client but never the app client.
+  {
+    files: ["lib/auth/**/*.{ts,tsx}"],
+    // The integration test opens its own pools as the test roles (like lib/db/integration.test.ts).
+    ignores: ["lib/auth/auth.integration.test.ts"],
+    rules: { "no-restricted-imports": ["error", { paths: rawDbPaths, patterns: rawDbPatterns }] },
   },
   // Environment scoping: process.env only in the named files above.
   {

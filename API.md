@@ -19,6 +19,25 @@ Inventory of every endpoint and server action. Updated in the same commit as any
 | Method | Path | Auth / roles | Purpose | Audit event | Rate limit |
 |---|---|---|---|---|---|
 | GET | `/api/health` | Public (intentionally; no tenant data) | Liveness plus database reachability (`select 1`). Returns `{status:"ok"}` or 503 `{status:"unavailable"}`; no versions, hosts, or error text. | None (health noise excluded) | None yet (resilience-builder to add a coarse limit) |
+| POST | `/api/auth/sign-in/email` | Public (it creates the session) | Email + password sign-in. Needs a verified, active account; sets the session cookie (httpOnly, SameSite=Lax, 12 h cap). Same 401 for a wrong password and an unknown address. | `auth.login` / `auth.login_failed` (known users only) | 5 per 15 min per client address |
+| POST | `/api/auth/sign-out` | Session | Ends the session server-side and clears the cookie. | `auth.logout` | Default (60 per minute per address) |
+| POST | `/api/auth/request-password-reset` | Public | Emails a single-use reset link (valid 60 min) if the address has an active account. Same answer either way. | `auth.password_reset_requested` (known users only) | 3 per 15 min per client address |
+| GET | `/api/auth/reset-password/{token}` | Public (the token is the credential) | Validates a link and redirects to `/reset-password?token=…` (or `?error=INVALID_TOKEN`). | None | 5 per 15 min per client address |
+| POST | `/api/auth/reset-password` | Public (the token is the credential) | Sets a new password, spends the token, signs out every session, and emails a "password changed" notice. | `auth.password_reset_completed` | 5 per 15 min per client address |
+| POST | `/api/auth/send-verification-email` | Public | Emails a new verification link if the address has an unverified, active account. | None | 3 per 15 min per client address |
+| GET | `/api/auth/verify-email` | Public (the signed token is the credential) | Marks the address verified; does not sign in. | `auth.email_verified` | 10 per 15 min per client address |
+| POST | `/api/auth/change-password` | Session | Changes the password after re-checking the current one; can sign out other sessions; emails a notice. | `auth.password_changed` | 5 per 15 min per client address |
+
+Only the eight `/api/auth/*` endpoints above are reachable; the route (`app/api/auth/[...all]/route.ts`) answers 404 for every other Better Auth path (sign-up, get-session, list-sessions, update-user, social login, ...). The list lives in `lib/auth/route-policy.ts` and a test keeps it equal to this table. POSTs are also checked for origin (CSRF) and redirect targets.
+
+## Pages
+
+| Path | Auth | Purpose |
+|---|---|---|
+| `/login` | Public | Email + password form. |
+| `/forgot-password` | Public | Requests a reset link; the same message whether or not the address has an account. |
+| `/reset-password` | Public (the emailed token is the credential) | Choose a new password; the token is removed from the address bar once read, and no Referer is sent. |
+| `/account` | Session (`requireSession()` inside the page) | Shows the signed-in role and a sign-out button. Proving ground for `requireSession()`. |
 
 ## Server actions
 

@@ -53,7 +53,7 @@ The per-organization `inference_endpoint` + `model_config` pattern is what makes
 - **Styling:** Tailwind + shadcn/ui
 - **Database:** Postgres on Neon (use the *pooled* connection string from Next.js). pgvector extension for RAG embeddings.
 - **ORM:** Drizzle, with Drizzle migrations from day one — no auto-sync schemas
-- **Auth:** NextAuth/Auth.js (or Clerk if we hit friction). Multi-tenant from the start.
+- **Auth:** self-hosted Better Auth (email + password, scrypt hashing, database sessions, email verification, password reset), running in our own Next.js app against our own Neon database. No third-party auth service: Clerk is out, and Neon Auth (managed Better Auth) is not HIPAA-eligible. Multi-tenant from the start; MFA (TOTP) is required and arrives in the next auth step.
 - **Inference:** Ollama (OpenAI-compatible API at `http://host:11434/v1`) on the tenant's hardware
 - **Tunnel:** Tailscale (free tier for personal use; stable URLs via Funnel for the backend-to-Ollama path)
 - **AI SDK:** Vercel AI SDK for streaming (works with Ollama's OpenAI-compatible endpoint)
@@ -149,7 +149,8 @@ Tenant hierarchy: **Organization (practice) → Users (psychologists, staff) →
 All domain tables include `organization_id`, `created_at`, `updated_at`, and `deleted_at` (where applicable).
 
 - **organizations** — the practice. Fields: name, type, state, inference_endpoint, model_config (JSON), data_retention_days, baa_signed_at. v1: exactly one row.
-- **users** — practice owner / associate / admin roles. Belong to one organization. `password_hash` (bcrypt).
+- **users** — practice owner / associate / admin roles. Belong to one organization. Email is globally unique, lowercase, and `email_verified` is set only by the auth layer. No credential here: the scrypt hash lives in `auth_accounts`.
+- **auth_accounts / auth_sessions / auth_verifications / auth_rate_limits** — Better Auth's tables (password hashes, session tokens, hashed reset tokens, rate-limit counters). No `organization_id`, no RLS: they are reachable only by the `auth_runtime` database role, never by `app_runtime` (migration 0006). Session `expires_at` is the idle deadline; the absolute cap is enforced from `created_at` in `requireSession()`.
 - **clients** — the children/clients being evaluated. `external_id` optional (if the practice has their own ID system). Minimum PII required.
 - **client_history** — longitudinal threads per client: prior evaluations, re-eval cadence (IDEA requires 3-year re-evals), notes between sessions.
 - **report_templates** — section structure as `jsonb`. `active_methodology_prompt_id` points at the one active prompt version (composite FK keeps it within the same template and org). v1 scope: psychoeducational evaluation template.
@@ -228,7 +229,7 @@ Application-level, written explicitly by route handlers. Not an ORM hook or DB t
 
 ## Roles and authorization
 
-Roles (on `users`): **owner** (practice owner, full access in their organization), **associate** (psychologist, access to assigned clients/reports), **admin** (staff, practice administration, no clinical content unless granted). Exact permission matrix is a Plan Mode item before auth is built.
+Roles (on `users`): **owner** (practice owner, full access in their organization), **associate** (psychologist, access to assigned clients/reports), **admin** (staff, practice administration, no clinical content unless granted). The permission matrix is approved (owner: everything in the practice, including setting `inference_endpoint` through an allow-listed admin action; associate: assigned clients and reports only; admin: users and practice administration, audit log without content, no clinical content unless granted). Identity comes only from `requireSession()` (`lib/auth/server.ts`), which returns `{userId, organizationId, role}` read from the database on every request; sessions idle out after 2 hours and end at 12 hours regardless (`lib/auth/config.ts`, both adjustable).
 
 **All permission checks happen server-side only.** The frontend hides things for UX; it never enforces anything.
 
@@ -270,7 +271,7 @@ Node >= 22 (developed on Node 24), npm.
 - `npm run dev`: dev server on localhost:3000 (Turbopack).
 - `npm run lint` / `npm run typecheck` / `npm test`: ESLint, `next typegen && tsc --noEmit`, Vitest (`npm run test:watch` to watch).
 - `npm run build` / `npm start`: production build and server.
-- Environment: copy `.env.example` to `.env.local` (or run `neon link` against the dev branch). `lib/env.ts` validates the runtime variables (`DATABASE_URL`, `INFERENCE_MODE`, `OLLAMA_BASE_URL`) at server start and fails with the variable name, never the value. `process.env` is read only in the files named in `PROCESS_ENV_ALLOWED` in `eslint.config.mjs` (lint-enforced); new configuration goes into the `lib/env.ts` schema and is read through `getEnv()`. `DATABASE_URL_UNPOOLED` (owner credential) is read by `drizzle.config.ts` only and is not in the app schema; a deployed environment holds the runtime variables only. `.env.example` lists every variable with its reader.
+- Environment: copy `.env.example` to `.env.local` (or run `neon link` against the dev branch). `lib/env.ts` validates the runtime variables (`DATABASE_URL`, `INFERENCE_MODE`, `OLLAMA_BASE_URL`) at server start, and the auth variables (`AUTH_DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `EMAIL_TRANSPORT`) the first time auth is used (a separate schema, so a missing one cannot take `/api/health` down) and fails with the variable name, never the value. `process.env` is read only in the files named in `PROCESS_ENV_ALLOWED` in `eslint.config.mjs` (lint-enforced); new configuration goes into the `lib/env.ts` schema and is read through `getEnv()`. `DATABASE_URL_UNPOOLED` (owner credential) is read by `drizzle.config.ts` only and is not in the app schema; a deployed environment holds the runtime variables only. `.env.example` lists every variable with its reader.
 - Ollama (host, not Docker): `brew services start ollama`, model `qwen3:1.7b` for the dev stub.
 - Database: `npm run db:generate` (new migration from schema changes; `npx drizzle-kit generate --custom --name=<slug>` for hand-written SQL), `npm run db:migrate` (applies to the database in `DATABASE_URL_UNPOOLED`; currently the Neon `dev` branch), `npm run db:check` (migration consistency, no DB connection). Commit the generated files in `drizzle/`. Data access goes through `tenantDb(ctx)` in `lib/db/tenant.ts` (ESLint bans the raw client elsewhere); every call runs in a transaction that sets `app.organization_id`, and Postgres row-level security policies (migration 0004) on every tenant table match against it, so raw SQL without a filter still sees one tenant only and no tenant means no rows. Hard deletion of a client is `purge_client()` only. DB integration tests (`lib/db/integration.test.ts`) run against a scratch Neon branch using `TEST_DATABASE_URL` and `TEST_APP_ROLE_PASSWORD` in the gitignored `.env.test.local`, and skip when those are absent. The app should connect as a login role that is a member of `app_runtime` (see `docs/RUNBOOK.md`).
 
@@ -321,7 +322,7 @@ Node >= 22 (developed on Node 24), npm.
 
 ## Open questions / decisions deferred
 
-- NextAuth vs Clerk vs Supabase Auth
+- ~~NextAuth vs Clerk vs Supabase Auth~~ Decided: self-hosted Better Auth (see PROGRESS.md for the reasoning).
 - Stripe billing integration timing — not v1
 - PDF/DOCX export library choice — pick when export work begins (likely a Node library server-side)
 - Tailscale vs Cloudflare Tunnel for the backend-to-SLM path — Tailscale first unless a specific need emerges
