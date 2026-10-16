@@ -16,6 +16,8 @@ export const users = pgTable(
     email: text("email").notNull(),
     emailVerified: boolean("email_verified").notNull().default(false),
     displayName: text("display_name").notNull(),
+    // Unused. Better Auth's schema check requires the column; nothing writes or reads it.
+    image: text("image"),
     role: text("role", { enum: USER_ROLES }).notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

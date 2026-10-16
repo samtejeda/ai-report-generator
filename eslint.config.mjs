@@ -29,6 +29,7 @@ const PROCESS_ENV_ALLOWED = [
   "next.config.ts", //                NODE_ENV, for dev-only CSP relaxations
   "instrumentation.ts", //            NEXT_RUNTIME, set by Next itself
   "lib/db/integration.test.ts", //    TEST_DATABASE_URL / TEST_APP_ROLE_PASSWORD (scratch Neon branch, tests only)
+  "lib/auth/auth.integration.test.ts", // same TEST_* variables, for the auth flows
 ];
 const processEnvMessage =
   "Do not read process.env here. Add the variable to the schema in lib/env.ts and call getEnv(). " +
@@ -59,6 +60,8 @@ const eslintConfig = defineConfig([
   // lib/auth may use the auth client but never the app client.
   {
     files: ["lib/auth/**/*.{ts,tsx}"],
+    // The integration test opens its own pools as the test roles (like lib/db/integration.test.ts).
+    ignores: ["lib/auth/auth.integration.test.ts"],
     rules: { "no-restricted-imports": ["error", { paths: rawDbPaths, patterns: rawDbPatterns }] },
   },
   // Environment scoping: process.env only in the named files above.

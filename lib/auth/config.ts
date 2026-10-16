@@ -15,7 +15,12 @@ export const SESSION_ABSOLUTE_SECONDS = 12 * 60 * 60;
  */
 export const SESSION_SLIDE_INTERVAL_SECONDS = 60;
 
-/** Sensitive actions (change password) need a sign-in this recent. */
+/**
+ * Better Auth applies this to its own "sensitive" endpoints (none of which we expose).
+ * Change-password does not rely on it: it asks for the current password every time. Later
+ * sensitive actions (owner MFA reset, changing the inference endpoint) must re-check
+ * freshness themselves.
+ */
 export const FRESH_PASSWORD_SECONDS = 5 * 60;
 
 /** A reset link is valid for this long, and only once. */

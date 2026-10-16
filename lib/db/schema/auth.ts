@@ -31,6 +31,15 @@ export const authAccounts = pgTable(
     accountId: text("account_id").notNull(),
     providerId: text("provider_id").notNull(),
     password: text("password"),
+    // Unused: no social/OAuth provider is configured. Better Auth's schema check requires these
+    // columns to exist; they stay NULL. Do not enable a provider without a review (it would put
+    // third-party tokens in this table).
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    idToken: text("id_token"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true }),
+    scope: text("scope"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

@@ -100,7 +100,7 @@ describe("mutability model matches the tenant helper registries", () => {
 
   it("the tenant registry and AUTH_TABLES together cover every table exactly once", () => {
     const tenant = [...TENANT_TABLES.map((t) => getTableName(t)), "organizations"];
-    const auth = AUTH_TABLES.map((t) => getTableName(t));
+    const auth: string[] = AUTH_TABLES.map((t) => getTableName(t));
     expect(tenant.filter((n) => auth.includes(n))).toEqual([]);
     expect([...tenant, ...auth].sort()).toEqual(allTables.map((t) => getTableName(t)).sort());
   });
