@@ -39,9 +39,11 @@ export type ResolveDeps = {
  * Role and organization come from this read, so a role change applies on the next request.
  */
 export async function resolveSession(headers: Headers, deps: ResolveDeps): Promise<SessionContext | null> {
-  const now = (deps.now ?? (() => new Date()))();
   const found = await deps.auth.api.getSession({ headers, query: { disableCookieCache: true, disableRefresh: true } });
   if (!found) return null;
+  // After the database read on purpose: Next's prerender rejects reading the clock before
+  // request-time I/O, and the clock is only needed once there is a session to judge.
+  const now = (deps.now ?? (() => new Date()))();
 
   const { session } = found;
   const created = new Date(session.createdAt).getTime();
