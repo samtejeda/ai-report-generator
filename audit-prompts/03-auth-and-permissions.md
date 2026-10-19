@@ -8,7 +8,7 @@ This is a pass/fail checklist and a definition of done, not build instructions.
 
 For each item, tell me pass or fail with a specific example.
 
-1. Proven auth provider (NextAuth/Auth.js or Clerk), not hand-rolled: bcrypt hashing, session management, email verification.
+1. Proven auth provider (self-hosted Better Auth), not hand-rolled: scrypt password hashing (the library default, accepted by Sam in place of bcrypt), session management, email verification.
 2. Every protected page and endpoint checks logged-in AND authorized (role and organization), at layout level and again in the handler.
 3. Users can only reach their own organization's data (and, for associates, only assigned clients); verified with a cross-tenant test.
 4. Sessions expire, invalidate on logout, and refresh securely.

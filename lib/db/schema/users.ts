@@ -1,24 +1,23 @@
 import { sql } from "drizzle-orm";
-import { check, pgTable, text, unique, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, check, pgTable, text, unique } from "drizzle-orm/pg-core";
 import { createdAt, deletedAt, organizationId, pk, updatedAt } from "./_shared";
 
 export const USER_ROLES = ["owner", "associate", "admin"] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
-// =====================================================================================
-// AUTH-PLAN EXTENSION POINT. This is a deliberately minimal shape for the data model.
-// The auth plan owns: credentials (password_hash or provider-managed), the link to the
-// auth identity, email uniqueness rules (per org vs global), sessions, tokens, MFA,
-// client assignment for associates. Add those as additive migrations. Open questions
-// are listed in PROGRESS.md. Do not put session or token columns in this file.
-// =====================================================================================
+// Credentials, sessions and reset tokens live in the auth tables (auth.ts), reached only
+// through the auth_runtime role. This table holds identity, role and tenant membership.
+// Email is globally unique (one account per address across all practices) and lowercase.
 export const users = pgTable(
   "users",
   {
     id: pk(),
     organizationId: organizationId(),
     email: text("email").notNull(),
+    emailVerified: boolean("email_verified").notNull().default(false),
     displayName: text("display_name").notNull(),
+    // Unused. Better Auth's schema check requires the column; nothing writes or reads it.
+    image: text("image"),
     role: text("role", { enum: USER_ROLES }).notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -26,10 +25,10 @@ export const users = pgTable(
   },
   (t) => [
     unique("users_org_id_uq").on(t.organizationId, t.id),
-    // Provisional: per-org active email uniqueness. The auth plan may tighten to global.
-    uniqueIndex("users_org_email_active_uq")
-      .on(t.organizationId, sql`lower(${t.email})`)
-      .where(sql`${t.deletedAt} is null`),
+    // Global, and includes deactivated rows: an address is never reused for a second
+    // account, and Better Auth looks users up by email without knowing about deleted_at.
+    unique("users_email_uq").on(t.email),
+    check("users_email_lowercase", sql`${t.email} = lower(${t.email})`),
     check("users_role_valid", sql`${t.role} in ('owner','associate','admin')`),
   ],
 );
