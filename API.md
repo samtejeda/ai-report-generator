@@ -27,16 +27,21 @@ Inventory of every endpoint and server action. Updated in the same commit as any
 | POST | `/api/auth/send-verification-email` | Public | Emails a new verification link if the address has an unverified, active account. | None | 3 per 15 min per client address |
 | GET | `/api/auth/verify-email` | Public (the signed token is the credential) | Marks the address verified; does not sign in. | `auth.email_verified` | 10 per 15 min per client address |
 | POST | `/api/auth/change-password` | Session | Changes the password after re-checking the current one; can sign out other sessions; emails a notice. | `auth.password_changed` | 5 per 15 min per client address |
+| POST | `/api/auth/two-factor/enable` | Session (password only; MFA not yet on) | Re-checks the password, creates an unverified authenticator secret and 10 backup codes (both stored encrypted), returns the setup URI and the codes once. MFA is not on until the first code verifies. | `auth.mfa_enrollment_started` | 5 per 15 min per client address |
+| POST | `/api/auth/two-factor/verify-totp` | Session (enrollment) or the signed code-step cookie (sign-in) | Enrollment: the first valid code turns MFA on. Sign-in: a valid code completes login; `trustDevice: true` also marks the device trusted for 14 days. 5 wrong codes end the challenge; 5 consecutive wrong codes lock the account's code step for 15 min. | `auth.mfa_enrolled`, `auth.login`, `auth.mfa_device_trusted`, `auth.mfa_failed` | 10 per 15 min per client address |
+| POST | `/api/auth/two-factor/verify-backup-code` | The signed code-step cookie (sign-in) | A valid unused backup code completes login and is spent. | `auth.login`, `auth.mfa_backup_code_used`, `auth.mfa_device_trusted`, `auth.mfa_failed` | 10 per 15 min per client address |
+| POST | `/api/auth/two-factor/generate-backup-codes` | Session (MFA on) | Re-checks the password, replaces all backup codes, returns the new ones once. | `auth.mfa_backup_codes_regenerated` | 5 per 15 min per client address |
 
-Only the eight `/api/auth/*` endpoints above are reachable; the route (`app/api/auth/[...all]/route.ts`) answers 404 for every other Better Auth path (sign-up, get-session, list-sessions, update-user, social login, ...). The list lives in `lib/auth/route-policy.ts` and a test keeps it equal to this table. POSTs are also checked for origin (CSRF) and redirect targets.
+Only the twelve `/api/auth/*` endpoints above are reachable; the route (`app/api/auth/[...all]/route.ts`) answers 404 for every other Better Auth path (sign-up, get-session, list-sessions, update-user, social login, ...). The list lives in `lib/auth/route-policy.ts` and a test keeps it equal to this table. POSTs are also checked for origin (CSRF) and redirect targets.
 
 ## Pages
 
 | Path | Auth | Purpose |
 |---|---|---|
-| `/login` | Public | Email + password form. |
+| `/login` | Public | Email + password form, then the code step (authenticator or backup code; an unchecked "Trust this device for 14 days" box). |
 | `/forgot-password` | Public | Requests a reset link; the same message whether or not the address has an account. |
 | `/reset-password` | Public (the emailed token is the credential) | Choose a new password; the token is removed from the address bar once read, and no Referer is sent. |
+| `/account/mfa` | Password session without MFA yet (`getEnrollingSessionOrNull()`); already-enrolled users are sent to `/account` | Three steps: confirm password, add the setup key to an authenticator app and type the first code, save the backup codes (shown once). |
 | `/account` | Session (`requireSession()` inside the page) | Shows the signed-in role and a sign-out button. Proving ground for `requireSession()`. |
 
 ## Server actions

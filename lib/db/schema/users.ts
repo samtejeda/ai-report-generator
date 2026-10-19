@@ -15,6 +15,9 @@ export const users = pgTable(
     organizationId: organizationId(),
     email: text("email").notNull(),
     emailVerified: boolean("email_verified").notNull().default(false),
+    // Set only by the auth layer (the MFA plugin), after the first authenticator code verifies.
+    // app_runtime cannot write it (migration 0008), so feature code cannot switch MFA off.
+    twoFactorEnabled: boolean("two_factor_enabled").notNull().default(false),
     displayName: text("display_name").notNull(),
     // Unused. Better Auth's schema check requires the column; nothing writes or reads it.
     image: text("image"),

@@ -226,8 +226,8 @@ describe("row-level security is declared for every tenant table (audit 04 item 1
 });
 
 describe("auth tables (separate registry, role-separated instead of row-level security)", () => {
-  it("are exactly the four Better Auth tables", () => {
-    expect(authConfigs.map((c) => c.name).sort()).toEqual(["auth_accounts", "auth_rate_limits", "auth_sessions", "auth_verifications"]);
+  it("are exactly the five Better Auth tables", () => {
+    expect(authConfigs.map((c) => c.name).sort()).toEqual(["auth_accounts", "auth_rate_limits", "auth_sessions", "auth_two_factors", "auth_verifications"]);
   });
 
   it("keep the base conventions (uuid id with default, created_at) but carry no organization_id", () => {
@@ -246,7 +246,9 @@ describe("auth tables (separate registry, role-separated instead of row-level se
         const cols = fk.reference().columns.map((col) => col.name);
         expect(getTableName(fk.reference().foreignTable)).toBe("users");
         expect(fk.onDelete, c.name).toBe("cascade");
-        const covered = c.indexes.some((i) => i.config.columns.some((col, n) => n === 0 && "name" in col && cols.includes(col.name as string)));
+        const covered =
+          c.indexes.some((i) => i.config.columns.some((col, n) => n === 0 && "name" in col && cols.includes(col.name as string))) ||
+          c.uniqueConstraints.some((u) => u.columns[0] !== undefined && cols.includes(u.columns[0].name));
         expect(covered, `${c.name}: FK on (${cols.join(", ")}) has no covering index`).toBe(true);
       }
     }
@@ -266,18 +268,29 @@ describe("auth tables (separate registry, role-separated instead of row-level se
     expect(users.indexes.map((i) => i.config.name)).not.toContain("users_org_email_active_uq");
   });
 
-  it("migration 0006 gives app_runtime no privilege on any auth table", () => {
-    const sql = readFileSync("drizzle/0006_auth_runtime_role_and_grants.sql", "utf8");
+  it("migrations 0006 and 0008 give app_runtime no privilege on any auth table", () => {
+    const sql = readFileSync("drizzle/0006_auth_runtime_role_and_grants.sql", "utf8") + "\n" + readFileSync("drizzle/0008_auth_two_factor.sql", "utf8");
     for (const name of AUTH_TABLE_NAMES) {
       const grants = sql.match(/GRANT [^;]*;/g)?.filter((g) => g.includes(name)) ?? [];
       expect(grants.length, name).toBeGreaterThan(0);
       for (const g of grants) expect(g, `${name}: ${g}`).not.toMatch(/\bapp_runtime\b/);
     }
     expect(sql).toMatch(/REVOKE ALL ON auth_accounts, auth_sessions, auth_verifications, auth_rate_limits FROM PUBLIC, app_runtime/);
+    expect(sql).toMatch(/REVOKE ALL ON auth_two_factors FROM PUBLIC, app_runtime/);
   });
 
-  it("migration 0006 gives auth_runtime nothing on tenant or clinical tables", () => {
-    const sql = readFileSync("drizzle/0006_auth_runtime_role_and_grants.sql", "utf8");
+  it("migration 0008: auth_runtime may flip users.two_factor_enabled, app_runtime may not, and nothing deletes an enrollment", () => {
+    const sql = readFileSync("drizzle/0008_auth_two_factor.sql", "utf8");
+    expect(sql).toMatch(/GRANT UPDATE \(two_factor_enabled\) ON users TO auth_runtime/);
+    expect(sql).toMatch(/GRANT SELECT, INSERT, UPDATE ON auth_two_factors TO auth_runtime/);
+    expect(sql).not.toMatch(/GRANT[^;]*DELETE[^;]*auth_two_factors/);
+    // app_runtime's column grants on users (0006) never list the flag, and 0008 adds none.
+    const appGrants = (readFileSync("drizzle/0006_auth_runtime_role_and_grants.sql", "utf8") + sql).match(/GRANT [^;]*TO app_runtime;/g) ?? [];
+    for (const g of appGrants) expect(g).not.toMatch(/two_factor_enabled/);
+  });
+
+  it("migrations 0006 and 0008 give auth_runtime nothing on tenant or clinical tables", () => {
+    const sql = readFileSync("drizzle/0006_auth_runtime_role_and_grants.sql", "utf8") + "\n" + readFileSync("drizzle/0008_auth_two_factor.sql", "utf8");
     const granted = (sql.match(/GRANT [^;]*TO auth_runtime;/g) ?? []).join("\n");
     for (const t of [...TENANT_TABLES.map((x) => getTableName(x)), "organizations"]) {
       if (t === "users") continue;

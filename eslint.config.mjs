@@ -28,6 +28,7 @@ const PROCESS_ENV_ALLOWED = [
   "drizzle.config.ts", //             the only reader of DATABASE_URL_UNPOOLED (migrations, owner credential)
   "next.config.ts", //                NODE_ENV, for dev-only CSP relaxations
   "instrumentation.ts", //            NEXT_RUNTIME, set by Next itself
+  "scripts/mfa-reset.mjs", //         break-glass MFA reset; reads DATABASE_URL_UNPOOLED (owner credential) on purpose
   "lib/db/integration.test.ts", //    TEST_DATABASE_URL / TEST_APP_ROLE_PASSWORD (scratch Neon branch, tests only)
   "lib/auth/auth.integration.test.ts", // same TEST_* variables, for the auth flows
 ];

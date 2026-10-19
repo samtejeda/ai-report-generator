@@ -39,3 +39,12 @@ describe("console transport", () => {
     await expect(createConsoleTransport({ production: true }).send(mailTemplates.passwordChanged("a@example.com"))).rejects.toThrow(/production/);
   });
 });
+
+describe("MFA notice", () => {
+  it("is a fixed sentence with no link, no code and no name", () => {
+    const mail = mailTemplates.mfaEnabled("a@example.com");
+    expect(mail.to).toBe("a@example.com");
+    expect(mail.text).not.toMatch(/https?:\/\/|\d{6}/);
+    expect(mail.text).toMatch(/not you/);
+  });
+});

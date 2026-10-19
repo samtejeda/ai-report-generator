@@ -13,6 +13,12 @@ export const AUTH_ENDPOINTS: readonly { method: "GET" | "POST"; pattern: RegExp;
   { method: "POST", pattern: /^\/send-verification-email$/, label: "/send-verification-email" },
   { method: "GET", pattern: /^\/verify-email$/, label: "/verify-email" },
   { method: "POST", pattern: /^\/change-password$/, label: "/change-password" },
+  // Authenticator (TOTP) second factor. Deliberately absent: /two-factor/disable (no self-service
+  // "turn MFA off"), /two-factor/get-totp-uri, and the email-code endpoints send-otp / verify-otp.
+  { method: "POST", pattern: /^\/two-factor\/enable$/, label: "/two-factor/enable" },
+  { method: "POST", pattern: /^\/two-factor\/verify-totp$/, label: "/two-factor/verify-totp" },
+  { method: "POST", pattern: /^\/two-factor\/verify-backup-code$/, label: "/two-factor/verify-backup-code" },
+  { method: "POST", pattern: /^\/two-factor\/generate-backup-codes$/, label: "/two-factor/generate-backup-codes" },
 ];
 
 /** `path` is the part after /api/auth, without the query string. */

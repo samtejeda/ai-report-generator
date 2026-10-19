@@ -12,6 +12,10 @@ describe("/api/auth route", () => {
     ["GET", "/get-session"],
     ["GET", "/list-sessions"],
     ["POST", "/update-user"],
+    ["POST", "/two-factor/disable"],
+    ["POST", "/two-factor/get-totp-uri"],
+    ["POST", "/two-factor/send-otp"],
+    ["POST", "/two-factor/verify-otp"],
     ["GET", "/ok"],
     ["GET", "/"],
   ] as const)("answers 404 with a generic body for %s %s", async (method, path) => {
