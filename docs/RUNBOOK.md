@@ -79,6 +79,17 @@ Every role must set up an authenticator app. The secret and the ten one-time bac
 
 Every tenant table has a policy `tenant_isolation` for `app_runtime`: a row is visible and writable only when its `organization_id` equals `app_current_org()`, which reads `app.organization_id` set by `tenantDb` for the current transaction. With nothing set, no rows match. The table owner (the migration role) is deliberately not forced through the policies, so **the app must never connect as the owner**; if it did, RLS would not protect anything. To check a database by hand: `select relname, relrowsecurity from pg_class where relname in (...)` and `select tablename, roles from pg_policies where schemaname = 'public'` (14 tables, 14 policies). Debugging tip: if a query unexpectedly returns zero rows, the usual cause is a statement run outside `tenantDb` (no tenant bound), not missing data.
 
+## Client access: roles and assignments (migration 0009)
+
+Who sees which client is decided inside the query (`lib/db/client-access.ts`): the **owner** sees every live client of the practice, an **associate** sees only clients with an active row in `client_assignments`, an **admin** sees none (no clinical content until a grant mechanism is designed with the admin screens). A client the caller may not see is simply absent (404), so nothing confirms an id exists.
+
+- **There is no screen or endpoint to assign a client yet** (`feat/auth-admin`). Until then an associate sees an empty list in any real environment. With the owner credential an assignment is one row: `insert into client_assignments (organization_id, client_id, user_id, assigned_by_user_id) values (...)` (all four from the same organization; the composite foreign keys reject a mix). Do this only on synthetic data until Phase C, and it is an audited admin action once the screen exists, so do not make it a habit.
+- **Ending an assignment** is `update client_assignments set deleted_at = now() where id = ...`; it takes effect on the person's next request. A client can be assigned again later (a new row).
+- **A role change applies on the next request** (the role is read from the database every time, never from the cookie); no sign-out is needed.
+- **Symptom: an associate says "my clients are gone".** Check, in order: the assignment row exists and `deleted_at` is null; the client's `deleted_at` is null; the user's `role` is still `associate`; the user and the client are in the same organization.
+- **Symptom: a page is blank for an admin.** By design: `/clients` shows an admin the 404 page and `/api/clients` answers 403. The refusal is in `audit_log` as `authz.denied` (role and reason only).
+- **Public pages and endpoints** are the one list in `lib/auth/public-surface.ts`; the proxy lets those through and everything else needs a session cookie. A route, page or server action added without a guard fails CI (`lib/auth/guard-coverage.test.ts`).
+
 ## Hard deletion of a client
 
 `SELECT purge_client(<org_uuid>, <client_uuid>)` (via `tenantDb(ctx).purgeClient(id)`; the function refuses an organization other than the transaction's tenant) deletes the client and all derived rows and returns per-table counts; it is not wired to any route and **needs Sam's explicit approval before it touches anything but synthetic data**. `audit_log` is never touched. Purged data persists in Neon history/backups until the retention window passes: a wording question for the privacy lawyer (see PROGRESS pre-launch checklist).

@@ -428,6 +428,13 @@ describe.skipIf(!ENABLED)("authorization through the real routes (Neon test bran
       }
     });
 
+    it("no CORS headers are ever sent, even to a cross-site Origin (audit 04 item 5)", async () => {
+      const cross = { origin: "https://evil.example.test" };
+      for (const r of [await get(ownerA, clientsGET, "/api/clients", cross), await get(ownerA, clientGET, `/api/clients/${c1}`, cross, { id: c1 }), await get(adminA, clientsGET, "/api/clients", cross), await get({ label: "x", orgId: "none" }, clientsGET, "/api/clients", cross)]) {
+        for (const name of ["access-control-allow-origin", "access-control-allow-credentials", "access-control-allow-methods"]) expect(r.headers.get(name), name).toBeNull();
+      }
+    });
+
     it("paging: a page is capped, pages do not overlap, and bad values are rejected", async () => {
       const p1 = await list(ownerA, "?limit=2");
       const p2 = await list(ownerA, "?limit=2&offset=2");
