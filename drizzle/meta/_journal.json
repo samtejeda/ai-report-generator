@@ -64,6 +64,13 @@
       "when": 1792417985038,
       "tag": "0008_auth_two_factor",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792444113571,
+      "tag": "0009_client_assignments",
+      "breakpoints": true
     }
   ]
 }

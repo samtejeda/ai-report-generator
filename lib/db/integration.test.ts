@@ -115,6 +115,7 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
         { reportId: report.id, sectionId: section.id, versionNumber: 2, editType: "human_edit", content: { text: "synthetic edit" }, createdByUserId: userId },
       ]);
       await t.insert(schema.clientHistory, { clientId: client.id, entryType: "note", occurredOn: "2026-01-01", summary: "synthetic", createdByUserId: userId });
+      await t.insert(schema.clientAssignments, { clientId: client.id, userId, assignedByUserId: userId });
       const [doc] = await t.insert(schema.ragDocuments, { clientId: client.id, sourceType: "client_note", title: "synthetic note" });
       const [chunk] = await t.insert(schema.ragChunks, { documentId: doc.id, chunkIndex: 0, content: "synthetic chunk" });
       await t.insert(schema.ragEmbeddings, { chunkId: chunk.id, model: "test-model", embedding: vec(1) });
@@ -501,6 +502,39 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
     });
   });
 
+  describe("client assignments (feat/auth-authz; migration 0009)", () => {
+    it("the app can assign and end an assignment, but never delete one or re-point it", async () => {
+      const [row] = await tA.insert(schema.clientAssignments, { clientId: A.client2Id, userId: A.userId, assignedByUserId: A.userId });
+      expect(row.organizationId).toBe(A.orgId);
+      await expectPgError(app.execute(sql`delete from client_assignments where id = ${row.id}`), INSUFFICIENT_PRIVILEGE);
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update client_assignments set client_id = ${A.clientId} where id = ${row.id}`)), INSUFFICIENT_PRIVILEGE);
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update client_assignments set user_id = ${A.userId} where id = ${row.id}`)), INSUFFICIENT_PRIVILEGE);
+      const ended = await tA.softDelete(schema.clientAssignments, row.id);
+      expect(ended).toHaveLength(1);
+      expect(ended[0].deletedAt).not.toBeNull();
+    });
+
+    it("one active assignment per client and user; an ended one can be granted again", async () => {
+      const [first] = await tA.insert(schema.clientAssignments, { clientId: A.client2Id, userId: A.userId, assignedByUserId: A.userId });
+      await expectPgError(tA.insert(schema.clientAssignments, { clientId: A.client2Id, userId: A.userId, assignedByUserId: A.userId }), UNIQUE_VIOLATION);
+      await tA.softDelete(schema.clientAssignments, first.id);
+      const [again] = await tA.insert(schema.clientAssignments, { clientId: A.client2Id, userId: A.userId, assignedByUserId: A.userId });
+      expect(again.id).not.toBe(first.id);
+      await tA.softDelete(schema.clientAssignments, again.id);
+    });
+
+    it("an assignment cannot cross organizations (composite FKs), and org B cannot see or end org A's", async () => {
+      await expectPgError(tA.insert(schema.clientAssignments, { clientId: B.clientId, userId: A.userId, assignedByUserId: A.userId }), FK_VIOLATION);
+      await expectPgError(tA.insert(schema.clientAssignments, { clientId: A.client2Id, userId: B.userId, assignedByUserId: A.userId }), FK_VIOLATION);
+      await expectPgError(tA.insert(schema.clientAssignments, { clientId: A.client2Id, userId: A.userId, assignedByUserId: B.userId }), FK_VIOLATION);
+      const mine = await tA.find(schema.clientAssignments, { limit: 50 });
+      expect(mine.length).toBeGreaterThan(0);
+      const theirs = await tB.find(schema.clientAssignments, { limit: 50 });
+      expect(theirs.every((r) => r.organizationId === B.orgId)).toBe(true);
+      expect(await tB.softDelete(schema.clientAssignments, mine[0].id)).toHaveLength(0);
+    });
+  });
+
   describe("hard deletion (purge_client)", () => {
     it("removes the client and every derived row, leaves other clients, other tenants, and the audit trail", async () => {
       const own = tenantDb({ organizationId: A.orgId }, owner);
@@ -522,6 +556,7 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
       expect(await count("report_sections", "report_id", victim.reportId)).toBe(0);
       expect(await count("report_versions", "report_id", victim.reportId)).toBe(0);
       expect(await count("client_history", "client_id", victim.clientId)).toBe(0);
+      expect(await count("client_assignments", "client_id", victim.clientId)).toBe(0);
       expect(await count("rag_documents", "client_id", victim.clientId)).toBe(0);
       expect(await count("rag_chunks", "document_id", victim.docId)).toBe(0);
       expect(await count("rag_embeddings", "chunk_id", victim.chunkId)).toBe(0);

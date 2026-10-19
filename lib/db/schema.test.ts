@@ -24,6 +24,7 @@ describe("schema conventions", () => {
     expect(configs.map((c) => c.name).sort()).toEqual(
       [
         "audit_log",
+        "client_assignments",
         "client_history",
         "clients",
         "jobs",
