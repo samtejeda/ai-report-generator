@@ -113,6 +113,15 @@ describe("guardedRoute: failures stay opaque", () => {
     log.mockRestore();
   });
 
+  it("lets Next.js control-flow errors (they carry a digest) through instead of turning them into a 500", async () => {
+    const signal = Object.assign(new Error("Dynamic server usage"), { digest: "DYNAMIC_SERVER_USAGE" });
+    const { guard } = make(null, { resolve: async () => Promise.reject(signal) });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(guard({ roles: ["owner"], resource: "client", handler: async () => Response.json({}) })(get())).rejects.toBe(signal);
+    expect(log).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
   it("a failing session lookup is a 500, not a pass", async () => {
     const { guard } = make(null, { resolve: async () => Promise.reject(new Error("db down")) });
     const log = vi.spyOn(console, "error").mockImplementation(() => {});

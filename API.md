@@ -39,13 +39,16 @@ Only the twelve `/api/auth/*` endpoints above are reachable; the route (`app/api
 
 ## Pages
 
+Everything except the public pages needs a session. `proxy.ts` sends a request with no session cookie to `/login` (307) or answers an API call 401; it is a convenience, and every page and handler re-checks for itself. The public pages and endpoints are the one list in `lib/auth/public-surface.ts`.
+
 | Path | Auth | Purpose |
 |---|---|---|
 | `/login` | Public | Email + password form, then the code step (authenticator or backup code; an unchecked "Trust this device for 14 days" box). |
 | `/forgot-password` | Public | Requests a reset link; the same message whether or not the address has an account. |
 | `/reset-password` | Public (the emailed token is the credential) | Choose a new password; the token is removed from the address bar once read, and no Referer is sent. |
 | `/account/mfa` | Password session without MFA yet (`getEnrollingSessionOrNull()`); already-enrolled users are sent to `/account` | Three steps: confirm password, add the setup key to an authenticator app and type the first code, save the backup codes (shown once). |
-| `/account` | Session (`requireSession()` inside the page) | Shows the signed-in role and a sign-out button. Proving ground for `requireSession()`. |
+| `/account` | Session (`(app)` layout and `requireSession()` inside the page) | Shows the signed-in role and a sign-out button. |
+| `/clients` | Session; owner or associate (`(app)/clients` layout and `requireRole()` inside the page). Admin: the 404 page, audited. | Plain list of the clients the caller may see (owner: the practice; associate: assigned only). Audit `client.listed`. |
 
 ## Server actions
 

@@ -66,6 +66,10 @@ export function createGuard(deps: GuardDeps) {
         const params = (routeContext?.params ? await routeContext.params : {}) as P;
         return await options.handler({ request, session, params });
       } catch (error) {
+        // Next.js controls prerendering, redirects and not-found by throwing errors that carry a
+        // `digest`. Those are signals, not failures: swallowing one would hide that this route
+        // reads the request (so it must stay dynamic). A plain Error never has a digest.
+        if (typeof (error as { digest?: unknown } | null)?.digest === "string") throw error;
         // Fixed message to the caller; the log carries the route's resource and nothing from the
         // error text or the request, which could hold client data.
         console.error(JSON.stringify({ event: "route_error", resource: options.resource, kind: error instanceof Error ? error.name : "unknown" }));
