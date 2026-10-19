@@ -337,13 +337,22 @@ export function createAuth(deps: AuthDeps) {
     databaseHooks: {
       session: {
         create: {
-          before: async (session) => {
+          before: async (session, context) => {
             const row = await findUserById(session.userId);
             if (!row || row.deletedAt) {
               if (row) await record(row, { action: "auth.login_failed", outcome: "failure", metadata: { reason: "deactivated" } }, null, session.ipAddress);
               return false;
             }
-            return { data: { ...session, expiresAt: new Date(now().getTime() + SESSION_IDLE_SECONDS * 1000) } };
+            // Finishing MFA enrollment makes the plugin swap the signed-in session for a new row.
+            // The new row keeps the old row's start time, so enrolling cannot restart the 12 h cap.
+            let createdAt = session.createdAt as Date;
+            if (context?.path === "/two-factor/verify-totp") {
+              const prior = await getSessionFromCtx(context).catch(() => null);
+              if (prior && prior.user.id === session.userId) createdAt = new Date(prior.session.createdAt);
+            }
+            const idleDeadline = now().getTime() + SESSION_IDLE_SECONDS * 1000;
+            const capDeadline = createdAt.getTime() + SESSION_ABSOLUTE_SECONDS * 1000;
+            return { data: { ...session, createdAt, expiresAt: new Date(Math.min(idleDeadline, capDeadline)) } };
           },
           after: async (session) => {
             const row = await findUserById(session.userId);
