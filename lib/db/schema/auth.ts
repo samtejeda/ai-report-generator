@@ -1,4 +1,4 @@
-import { bigint, index, integer, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { bigint, boolean, index, integer, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { createdAt, pk, updatedAt } from "./_shared";
 import { users } from "./users";
 
@@ -102,4 +102,27 @@ export const authRateLimits = pgTable(
   (t) => [unique("auth_rate_limits_key_uq").on(t.key)],
 );
 
-export const AUTH_TABLES = [authAccounts, authSessions, authVerifications, authRateLimits] as const;
+// One authenticator (TOTP) enrollment per user. `secret` and `backup_codes` are stored ENCRYPTED
+// (AES-GCM, key derived from BETTER_AUTH_SECRET), never in clear: rotating that secret
+// invalidates every enrollment (see docs/RUNBOOK.md). `verified` is false until the first code
+// is accepted; the user is not MFA-enabled before that. The failure counter and lock give the
+// per-account lockout on second-factor guesses.
+export const authTwoFactors = pgTable(
+  "auth_two_factors",
+  {
+    id: pk(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    secret: text("secret").notNull(),
+    backupCodes: text("backup_codes").notNull(),
+    verified: boolean("verified").notNull().default(true),
+    failedVerificationCount: integer("failed_verification_count").notNull().default(0),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [unique("auth_two_factors_user_uq").on(t.userId)],
+);
+
+export const AUTH_TABLES = [authAccounts, authSessions, authVerifications, authRateLimits, authTwoFactors] as const;

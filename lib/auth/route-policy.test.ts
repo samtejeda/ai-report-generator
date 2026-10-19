@@ -11,6 +11,10 @@ describe("auth route allow-list", () => {
     ["POST", "/send-verification-email"],
     ["GET", "/verify-email"],
     ["POST", "/change-password"],
+    ["POST", "/two-factor/enable"],
+    ["POST", "/two-factor/verify-totp"],
+    ["POST", "/two-factor/verify-backup-code"],
+    ["POST", "/two-factor/generate-backup-codes"],
   ])("allows %s %s", (method, path) => {
     expect(isAllowedAuthRequest(method, path)).toBe(true);
   });
@@ -40,6 +44,14 @@ describe("auth route allow-list", () => {
     ["POST", "/sign-in/email/../sign-up/email"],
     ["DELETE", "/sign-out"],
     ["POST", ""],
+    ["POST", "/two-factor/disable"], // no self-service "turn MFA off"
+    ["POST", "/two-factor/get-totp-uri"],
+    ["POST", "/two-factor/send-otp"], // email codes stay off
+    ["POST", "/two-factor/verify-otp"],
+    ["GET", "/two-factor/enable"],
+    ["POST", "/two-factor/view-backup-codes"], // server-only in the library
+    ["POST", "/two-factor/verify-totp/extra"],
+    ["POST", "/totp/generate"],
   ])("refuses %s %s", (method, path) => {
     expect(isAllowedAuthRequest(method, path)).toBe(false);
   });

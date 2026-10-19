@@ -19,6 +19,7 @@ const identitySchema = z.object({
   organizationId: z.uuid(),
   role: z.enum(USER_ROLES),
   emailVerified: z.boolean(),
+  twoFactorEnabled: z.boolean(),
   deletedAt: z.coerce.date().nullish(),
 });
 
@@ -26,6 +27,12 @@ export type ResolveDeps = {
   auth: Auth;
   authDb: AuthDb;
   now?: () => Date;
+  /**
+   * Only the MFA enrollment page sets this. A signed-in user who has not finished setting up the
+   * authenticator app gets NO session from anything else: every other caller sees null until
+   * enrollment is complete, so a password alone never reaches any protected data.
+   */
+  allowUnenrolled?: boolean;
 };
 
 /**
@@ -34,7 +41,8 @@ export type ResolveDeps = {
  *     refresh disabled (it cannot write cookies from a Server Component).
  *  2. The absolute cap is enforced from created_at, and a capped session is deleted.
  *  3. A deactivated user or unverified email gets no session (and deactivation deletes theirs).
- *  4. An active session slides its idle deadline forward at most once per interval, never past
+ *  4. MFA must be enrolled (see allowUnenrolled).
+ *  5. An active session slides its idle deadline forward at most once per interval, never past
  *     the cap.
  * Role and organization come from this read, so a role change applies on the next request.
  */
@@ -60,6 +68,7 @@ export async function resolveSession(headers: Headers, deps: ResolveDeps): Promi
     return null;
   }
   if (!user.emailVerified) return null;
+  if (!user.twoFactorEnabled && !deps.allowUnenrolled) return null;
 
   const lastTouched = new Date(session.updatedAt).getTime();
   if (now.getTime() - lastTouched >= SESSION_SLIDE_INTERVAL_SECONDS * 1000) {

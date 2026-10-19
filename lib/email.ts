@@ -48,4 +48,12 @@ export const mailTemplates = {
       text: "The password for your account was just changed, and all other sessions were signed out.\n\nIf this was not you, contact your practice owner right away.",
     };
   },
+  /** Sent when an authenticator is first set up. A thief who knew only the password and set up their own would otherwise be silent. */
+  mfaEnabled(to: string): Mail {
+    return {
+      to,
+      subject: "Two-step sign-in was turned on",
+      text: "An authenticator app was just set up for your account.\n\nIf this was not you, contact your practice owner right away.",
+    };
+  },
 };

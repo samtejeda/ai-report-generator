@@ -23,6 +23,23 @@ export const SESSION_SLIDE_INTERVAL_SECONDS = 60;
  */
 export const FRESH_PASSWORD_SECONDS = 5 * 60;
 
+/** How long the code step stays open after the password is accepted. */
+export const TWO_FACTOR_CHALLENGE_SECONDS = 5 * 60;
+
+/**
+ * "Trust this device": a device the user ticks the box on skips the code step (never the
+ * password) until it goes unused this long. Every sign-in from the device pushes the date
+ * forward, so a device in daily use stays trusted: this is an idle window, not a hard cap.
+ * Password change, password reset and an MFA reset revoke every trusted device of the user.
+ */
+export const TRUSTED_DEVICE_SECONDS = 14 * 24 * 60 * 60;
+
+/** Consecutive wrong codes (across challenges) before the account's code step locks. */
+export const MFA_LOCKOUT = { maxFailedAttempts: 5, durationSeconds: 15 * 60 } as const;
+
+/** Authenticator app label. */
+export const MFA_ISSUER = "AI Report Generator";
+
 /** A reset link is valid for this long, and only once. */
 export const RESET_TOKEN_SECONDS = 60 * 60;
 
@@ -43,6 +60,8 @@ export const RATE_LIMITS = {
   sendVerificationEmail: { window: 15 * 60, max: 3 },
   verifyEmail: { window: 15 * 60, max: 10 },
   changePassword: { window: 15 * 60, max: 5 },
+  verifyCode: { window: 15 * 60, max: 10 },
+  mfaSetup: { window: 15 * 60, max: 5 },
 } as const;
 
 /**

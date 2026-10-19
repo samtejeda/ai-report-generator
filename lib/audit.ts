@@ -24,6 +24,15 @@ export const AUDIT_ACTIONS = [
   "auth.password_reset_completed",
   "auth.email_verified",
   "auth.session_ended",
+  // MFA (feat/auth-mfa). Codes, secrets and device tokens are never recorded, only that it happened.
+  "auth.mfa_enrollment_started",
+  "auth.mfa_enrolled",
+  "auth.mfa_challenge",
+  "auth.mfa_failed",
+  "auth.mfa_backup_code_used",
+  "auth.mfa_backup_codes_regenerated",
+  "auth.mfa_device_trusted",
+  "auth.mfa_reset",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
