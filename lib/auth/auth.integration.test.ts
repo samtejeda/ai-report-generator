@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { createHmac } from "node:crypto";
 import { Pool } from "@neondatabase/serverless";
 import { drizzle, type NeonDatabase } from "drizzle-orm/neon-serverless";
 import { audit } from "@/lib/audit";
@@ -140,7 +141,10 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
     return { res, cookie: cookieFrom(res) };
   }
 
-  const session = (cookie: string) => resolveSession(new Headers({ cookie }), { auth, authDb, now });
+  // The older tests below use users without an authenticator, so they resolve with the enrollment
+  // variant; the MFA block uses `strictSession`, which is what requireSession() really does.
+  const session = (cookie: string) => resolveSession(new Headers({ cookie }), { auth, authDb, now, allowUnenrolled: true });
+  const strictSession = (cookie: string) => resolveSession(new Headers({ cookie }), { auth, authDb, now });
 
   async function auditRows(orgId: string, action?: string) {
     const conds = [eq(schema.auditLog.organizationId, orgId)];
@@ -607,6 +611,381 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
     });
   });
 
+  describe("two-step sign-in (MFA)", () => {
+    const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    function b32Bytes(secret: string): Buffer {
+      let bits = "";
+      for (const ch of secret.replace(/=+$/, "")) bits += B32.indexOf(ch).toString(2).padStart(5, "0");
+      const bytes = Buffer.alloc(Math.floor(bits.length / 8));
+      for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(bits.slice(i * 8, i * 8 + 8), 2);
+      return bytes;
+    }
+    // RFC 6238, SHA-1, 6 digits, 30 s: what any authenticator app does.
+    function totpCode(secret: string, at = Date.now()): string {
+      const counter = Buffer.alloc(8);
+      counter.writeBigUInt64BE(BigInt(Math.floor(at / 1000 / 30)));
+      const h = createHmac("sha1", b32Bytes(secret)).update(counter).digest();
+      const off = h[h.length - 1] & 0xf;
+      const n = ((h[off] & 0x7f) << 24) | (h[off + 1] << 16) | (h[off + 2] << 8) | h[off + 3];
+      return String(n % 1_000_000).padStart(6, "0");
+    }
+    const wrongCode = (secret: string) => String((Number(totpCode(secret)) + 1) % 1_000_000).padStart(6, "0");
+    const named = (res: Response, name: string) => res.headers.getSetCookie().map((c) => c.split(";")[0]).find((c) => c.includes(`${name}=`) && !/=$/.test(c));
+
+    type Enrolled = Fx & { secret: string; backupCodes: string[]; cookie: string; firstCookie: string };
+    async function enrolled(label: string, opts: Parameters<typeof seedUser>[2] = {}): Promise<Enrolled> {
+      const orgId = await seedOrg(label);
+      const u = await seedUser(orgId, label, opts);
+      const first = await signIn(u.email);
+      const en = await call("/two-factor/enable", { body: { password: GOOD_PASSWORD }, cookie: first.cookie });
+      expect(en.status).toBe(200);
+      const { totpURI, backupCodes } = (await en.json()) as { totpURI: string; backupCodes: string[] };
+      const secret = new URL(totpURI).searchParams.get("secret")!;
+      const verified = await call("/two-factor/verify-totp", { body: { code: totpCode(secret) }, cookie: first.cookie });
+      expect(verified.status).toBe(200);
+      return { ...u, secret, backupCodes, cookie: cookieFrom(verified), firstCookie: first.cookie };
+    }
+    // Password step for an enrolled user: returns the code-step cookie.
+    async function challenge(email: string, extraCookie?: string) {
+      const res = await call("/sign-in/email", { body: { email, password: GOOD_PASSWORD }, cookie: extraCookie });
+      return { res, body: (await res.clone().json()) as { twoFactorRedirect?: boolean }, cookie: cookieFrom(res) };
+    }
+    const verifyCode = (cookie: string, code: string, extra: Record<string, unknown> = {}, path = "/two-factor/verify-totp") =>
+      call(path, { body: { code, ...extra }, cookie });
+    const sessionCount = async (userId: string) => (await owner.select().from(schema.authSessions).where(eq(schema.authSessions.userId, userId))).length;
+
+    it("a password alone is never enough for a user without an authenticator: no session for requireSession, only for the enrollment page", async () => {
+      const orgId = await seedOrg("mfa-gate");
+      const u = await seedUser(orgId, "mfa-gate");
+      const { res, cookie } = await signIn(u.email);
+      expect(res.status).toBe(200);
+      expect(await strictSession(cookie)).toBeNull();
+      expect(await session(cookie)).toEqual({ userId: u.userId, organizationId: orgId, role: "owner" });
+    });
+
+    it("starting enrollment needs the password again, stores the secret and backup codes encrypted, and does not turn MFA on yet", async () => {
+      const orgId = await seedOrg("mfa-start");
+      const u = await seedUser(orgId, "mfa-start");
+      const { cookie } = await signIn(u.email);
+      const bad = await call("/two-factor/enable", { body: { password: "not the password at all" }, cookie });
+      expect(bad.status).toBe(400);
+      expect(await owner.select().from(schema.authTwoFactors).where(eq(schema.authTwoFactors.userId, u.userId))).toHaveLength(0);
+
+      const res = await call("/two-factor/enable", { body: { password: GOOD_PASSWORD }, cookie });
+      expect(res.status).toBe(200);
+      const { totpURI, backupCodes } = (await res.json()) as { totpURI: string; backupCodes: string[] };
+      const secret = new URL(totpURI).searchParams.get("secret")!;
+      expect(backupCodes).toHaveLength(10);
+      const [row] = await owner.select().from(schema.authTwoFactors).where(eq(schema.authTwoFactors.userId, u.userId));
+      expect(row.verified).toBe(false);
+      expect(row.secret).not.toContain(secret);
+      expect(row.secret).not.toContain(b32Bytes(secret).toString("utf8"));
+      for (const code of backupCodes) expect(row.backupCodes).not.toContain(code);
+      const [user] = await owner.select().from(schema.users).where(eq(schema.users.id, u.userId));
+      expect(user.twoFactorEnabled).toBe(false);
+      // A wrong first code does not turn it on, and the user stays gated.
+      expect((await verifyCode(cookie, wrongCode(secret))).status).toBe(401);
+      const [still] = await owner.select().from(schema.users).where(eq(schema.users.id, u.userId));
+      expect(still.twoFactorEnabled).toBe(false);
+      expect(await strictSession(cookie)).toBeNull();
+      expect(await auditRows(orgId, "auth.mfa_enrollment_started")).toHaveLength(1);
+      expect(await auditRows(orgId, "auth.mfa_enrolled")).toHaveLength(0);
+    });
+
+    it("the first valid code turns MFA on, re-issues the session, emails a notice, and is audited without a false login", async () => {
+      outbox.length = 0;
+      const e = await enrolled("mfa-enroll");
+      const [user] = await owner.select().from(schema.users).where(eq(schema.users.id, e.userId));
+      expect(user.twoFactorEnabled).toBe(true);
+      expect(await strictSession(e.cookie)).toEqual({ userId: e.userId, organizationId: e.orgId, role: "owner" });
+      expect(await strictSession(e.firstCookie)).toBeNull(); // the pre-MFA session was replaced
+      expect((await mailTo(e.email, /two-step sign-in was turned on/i)).length).toBe(1);
+      expect(await auditRows(e.orgId, "auth.mfa_enrolled")).toHaveLength(1);
+      expect(await auditRows(e.orgId, "auth.login")).toHaveLength(1); // the password sign-in only
+    });
+
+    it("re-issuing the session at enrollment does not restart the 12 hour clock", async () => {
+      const orgId = await seedOrg("mfa-cap");
+      const u = await seedUser(orgId, "mfa-cap");
+      const first = await signIn(u.email);
+      const old = new Date(Date.now() - 11 * 3_600_000);
+      await owner.update(schema.authSessions).set({ createdAt: old }).where(eq(schema.authSessions.userId, u.userId));
+      const en = await call("/two-factor/enable", { body: { password: GOOD_PASSWORD }, cookie: first.cookie });
+      const secret = new URL(((await en.json()) as { totpURI: string }).totpURI).searchParams.get("secret")!;
+      const v = await call("/two-factor/verify-totp", { body: { code: totpCode(secret) }, cookie: first.cookie });
+      expect(v.status).toBe(200);
+      const [row] = await owner.select().from(schema.authSessions).where(eq(schema.authSessions.userId, u.userId));
+      expect(Math.abs(row.createdAt.getTime() - old.getTime()), "new session kept the original created_at").toBeLessThan(60_000);
+    });
+
+    it("sign-in with MFA on: the password gives a code step and NO session; a valid code completes it; audit shows challenge then login", async () => {
+      const e = await enrolled("mfa-signin");
+      const before = await sessionCount(e.userId);
+      const c = await challenge(e.email);
+      expect(c.body.twoFactorRedirect).toBe(true);
+      expect(c.cookie).toMatch(/two_factor=/);
+      expect(c.cookie).not.toMatch(/session_token/);
+      expect(await sessionCount(e.userId)).toBe(before); // the pending session was deleted
+      expect(await auditRows(e.orgId, "auth.mfa_challenge")).toHaveLength(1);
+      const loginsBefore = (await auditRows(e.orgId, "auth.login")).length;
+
+      const ok = await verifyCode(c.cookie, totpCode(e.secret));
+      expect(ok.status).toBe(200);
+      expect(await strictSession(cookieFrom(ok))).toEqual({ userId: e.userId, organizationId: e.orgId, role: "owner" });
+      const logins = await auditRows(e.orgId, "auth.login");
+      expect(logins).toHaveLength(loginsBefore + 1);
+      expect(logins.at(-1)!.metadata).toMatchObject({ method: "password+totp" });
+    });
+
+    it("a wrong code gives no session and is audited; the challenge cannot be replayed after it succeeds", async () => {
+      const e = await enrolled("mfa-wrong");
+      const c = await challenge(e.email);
+      const bad = await verifyCode(c.cookie, wrongCode(e.secret));
+      expect(bad.status).toBe(401);
+      expect(cookieFrom(bad)).not.toMatch(/session_token/);
+      const failed = await auditRows(e.orgId, "auth.mfa_failed");
+      expect(failed).toHaveLength(1);
+      expect(failed[0]).toMatchObject({ actorUserId: e.userId, outcome: "failure" });
+      expect(failed[0].metadata).toMatchObject({ method: "totp", reason: "invalid_code" });
+
+      const ok = await verifyCode(c.cookie, totpCode(e.secret));
+      expect(ok.status).toBe(200);
+      const replay = await verifyCode(c.cookie, totpCode(e.secret));
+      expect(replay.status).toBe(401);
+      expect(cookieFrom(replay)).not.toMatch(/session_token/);
+    });
+
+    it("a code step left open past its time is refused", async () => {
+      const e = await enrolled("mfa-expired");
+      const c = await challenge(e.email);
+      await owner.update(schema.authVerifications).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(schema.authVerifications.value, e.userId));
+      const res = await verifyCode(c.cookie, totpCode(e.secret));
+      expect(res.status).toBe(401);
+      expect(cookieFrom(res)).not.toMatch(/session_token/);
+    });
+
+    it("a code step cookie cannot be forged or borrowed from another user", async () => {
+      const a = await enrolled("mfa-forge-a");
+      const b = await enrolled("mfa-forge-b");
+      const cb = await challenge(b.email);
+      // B's challenge answered with A's valid code: refused (the code is checked against B's secret).
+      expect((await verifyCode(cb.cookie, totpCode(a.secret))).status).toBe(401);
+      expect((await verifyCode("rg.two_factor=forged.value", totpCode(a.secret))).status).toBe(401);
+      expect((await verifyCode("", totpCode(a.secret))).status).toBe(401);
+    });
+
+    it("5 consecutive wrong codes lock the code step for 15 minutes even for the right code, and it clears when the lock passes", async () => {
+      const e = await enrolled("mfa-lock");
+      for (let i = 0; i < 5; i++) {
+        const c = await challenge(e.email);
+        expect((await verifyCode(c.cookie, wrongCode(e.secret))).status).toBe(401);
+      }
+      const c = await challenge(e.email);
+      const locked = await verifyCode(c.cookie, totpCode(e.secret));
+      expect(locked.status).toBe(429);
+      expect(cookieFrom(locked)).not.toMatch(/session_token/);
+      const [row] = await owner.select().from(schema.authTwoFactors).where(eq(schema.authTwoFactors.userId, e.userId));
+      expect(row.lockedUntil!.getTime()).toBeGreaterThan(Date.now() + 13 * 60_000);
+      expect((await auditRows(e.orgId, "auth.mfa_failed")).some((r) => (r.metadata as { reason?: string }).reason === "locked")).toBe(true);
+
+      await owner.update(schema.authTwoFactors).set({ lockedUntil: new Date(Date.now() - 1000) }).where(eq(schema.authTwoFactors.userId, e.userId));
+      const c2 = await challenge(e.email);
+      expect((await verifyCode(c2.cookie, totpCode(e.secret))).status).toBe(200);
+    });
+
+    it("code guessing is throttled per client address: the 11th attempt in 15 minutes gets 429", async () => {
+      const ip = nextIp();
+      const statuses: number[] = [];
+      for (let i = 0; i < 11; i++) statuses.push((await call("/two-factor/verify-totp", { body: { code: "000000" }, ip })).status);
+      expect(statuses.slice(0, 10).every((s) => s === 401)).toBe(true);
+      expect(statuses[10]).toBe(429);
+    });
+
+    it("a backup code completes sign-in once and then never again; it is audited", async () => {
+      const e = await enrolled("mfa-backup");
+      const code = e.backupCodes[0];
+      const c = await challenge(e.email);
+      const ok = await verifyCode(c.cookie, code, {}, "/two-factor/verify-backup-code");
+      expect(ok.status).toBe(200);
+      expect(await strictSession(cookieFrom(ok))).not.toBeNull();
+      expect(await auditRows(e.orgId, "auth.mfa_backup_code_used")).toHaveLength(1);
+      const c2 = await challenge(e.email);
+      expect((await verifyCode(c2.cookie, code, {}, "/two-factor/verify-backup-code")).status).toBe(401);
+      const c3 = await challenge(e.email);
+      expect((await verifyCode(c3.cookie, e.backupCodes[1], {}, "/two-factor/verify-backup-code")).status).toBe(200);
+    });
+
+    it("regenerating backup codes needs a session and the password, replaces the old codes, and is audited", async () => {
+      const e = await enrolled("mfa-regen");
+      expect((await call("/two-factor/generate-backup-codes", { body: { password: GOOD_PASSWORD } })).status).toBe(401);
+      expect((await call("/two-factor/generate-backup-codes", { body: { password: "not the password at all" }, cookie: e.cookie })).status).toBe(400);
+      const res = await call("/two-factor/generate-backup-codes", { body: { password: GOOD_PASSWORD }, cookie: e.cookie });
+      expect(res.status).toBe(200);
+      const fresh = ((await res.json()) as { backupCodes: string[] }).backupCodes;
+      expect(fresh).toHaveLength(10);
+      const c = await challenge(e.email);
+      expect((await verifyCode(c.cookie, e.backupCodes[0], {}, "/two-factor/verify-backup-code")).status).toBe(401);
+      const c2 = await challenge(e.email);
+      expect((await verifyCode(c2.cookie, fresh[0], {}, "/two-factor/verify-backup-code")).status).toBe(200);
+      expect(await auditRows(e.orgId, "auth.mfa_backup_codes_regenerated")).toHaveLength(1);
+    });
+
+    describe("trusted devices", () => {
+      async function trusted(label: string) {
+        const e = await enrolled(label);
+        const c = await challenge(e.email);
+        const ok = await verifyCode(c.cookie, totpCode(e.secret), { trustDevice: true });
+        expect(ok.status).toBe(200);
+        const trust = named(ok, "trust_device");
+        expect(trust, "a trusted-device cookie was set").toBeDefined();
+        return { ...e, trust: trust! };
+      }
+
+      it("only when asked: without the box the device is not trusted and every sign-in needs a code", async () => {
+        const e = await enrolled("trust-off");
+        const c = await challenge(e.email);
+        const ok = await verifyCode(c.cookie, totpCode(e.secret));
+        expect(named(ok, "trust_device")).toBeUndefined();
+        expect((await challenge(e.email)).body.twoFactorRedirect).toBe(true);
+      });
+
+      it("a trusted device skips the code but still needs the password, and the sign-in is audited as such", async () => {
+        const t = await trusted("trust-on");
+        expect(await auditRows(t.orgId, "auth.mfa_device_trusted")).toHaveLength(1);
+        const again = await challenge(t.email, t.trust);
+        expect(again.body.twoFactorRedirect).toBeUndefined();
+        expect(await strictSession(again.cookie)).toEqual({ userId: t.userId, organizationId: t.orgId, role: "owner" });
+        const logins = await auditRows(t.orgId, "auth.login");
+        expect(logins.at(-1)!.metadata).toMatchObject({ method: "password+trusted_device" });
+        // The trust cookie is not a login: a wrong password with it gets nothing.
+        const wrong = await call("/sign-in/email", { body: { email: t.email, password: "not the password at all" }, cookie: t.trust });
+        expect(wrong.status).toBe(401);
+        expect(cookieFrom(wrong)).not.toMatch(/session_token/);
+      });
+
+      it("is bound to the person: another user's trusted-device cookie still gets the code step", async () => {
+        const a = await trusted("trust-bound-a");
+        const b = await enrolled("trust-bound-b");
+        expect((await challenge(b.email, a.trust)).body.twoFactorRedirect).toBe(true);
+      });
+
+      it("expires: a lapsed record is not honored", async () => {
+        const t = await trusted("trust-expired");
+        await owner.update(schema.authVerifications).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(schema.authVerifications.value, t.userId));
+        expect((await challenge(t.email, t.trust)).body.twoFactorRedirect).toBe(true);
+      });
+
+      it("lasts 14 days", async () => {
+        const t = await trusted("trust-14d");
+        const rows = await owner.select().from(schema.authVerifications).where(eq(schema.authVerifications.value, t.userId));
+        const days = Math.max(...rows.map((r) => (r.expiresAt.getTime() - Date.now()) / 86_400_000));
+        expect(days).toBeGreaterThan(13.9);
+        expect(days).toBeLessThan(14.1);
+      });
+
+      it("is revoked by a password change", async () => {
+        const t = await trusted("trust-chg");
+        const { cookie } = await challenge(t.email, t.trust);
+        const res = await call("/change-password", { body: { currentPassword: GOOD_PASSWORD, newPassword: "changed passphrase 123" }, cookie });
+        expect(res.status).toBe(200);
+        const next = await call("/sign-in/email", { body: { email: t.email, password: "changed passphrase 123" }, cookie: t.trust });
+        expect(((await next.json()) as { twoFactorRedirect?: boolean }).twoFactorRedirect).toBe(true);
+      });
+
+      it("is revoked by a password reset, and the reset leaves MFA on (a stolen mailbox alone gets no session)", async () => {
+        const t = await trusted("trust-reset");
+        outbox.length = 0;
+        await call("/request-password-reset", { body: { email: t.email, redirectTo: "/reset-password" } });
+        const [mail] = await mailTo(t.email, /reset/i);
+        const done = await call("/reset-password", { body: { token: tokenFromMail(mail), newPassword: "a brand new passphrase 99" } });
+        expect(done.status).toBe(200);
+        expect(cookieFrom(done)).not.toMatch(/session_token/);
+        const next = await call("/sign-in/email", { body: { email: t.email, password: "a brand new passphrase 99" }, cookie: t.trust });
+        expect(((await next.json()) as { twoFactorRedirect?: boolean }).twoFactorRedirect).toBe(true);
+        const [user] = await owner.select().from(schema.users).where(eq(schema.users.id, t.userId));
+        expect(user.twoFactorEnabled).toBe(true);
+      });
+    });
+
+    describe("role separation for the MFA tables", () => {
+      it("app_runtime cannot read the table or flip the MFA flag; auth_runtime cannot delete an enrollment", async () => {
+        const e = await enrolled("mfa-roles");
+        await expectPgError(app.execute(sql`select 1 from auth_two_factors limit 1`), INSUFFICIENT_PRIVILEGE);
+        await expectPgError(app.execute(sql`update users set two_factor_enabled = false where id = ${e.userId}`), INSUFFICIENT_PRIVILEGE);
+        await expectPgError(app.execute(sql`update users set two_factor_enabled = true where id = ${e.userId}`), INSUFFICIENT_PRIVILEGE);
+        await expectPgError(authDb.execute(sql`delete from auth_two_factors where user_id = ${e.userId}`), INSUFFICIENT_PRIVILEGE);
+        const [user] = await owner.select().from(schema.users).where(eq(schema.users.id, e.userId));
+        expect(user.twoFactorEnabled).toBe(true);
+      });
+    });
+
+    it("a cross-site request to the code endpoint is refused", async () => {
+      const e = await enrolled("mfa-origin");
+      const c = await challenge(e.email);
+      const res = await call("/two-factor/verify-totp", { body: { code: totpCode(e.secret) }, cookie: c.cookie, origin: "https://evil.example" });
+      expect(res.status).toBe(403);
+    });
+
+    it("no audit row for the MFA events carries a secret, a code, a backup code, an address or a device token", async () => {
+      const e = await enrolled("mfa-audit");
+      const c = await challenge(e.email);
+      const code = totpCode(e.secret);
+      await verifyCode(c.cookie, code, { trustDevice: true });
+      const c2 = await challenge(e.email);
+      await verifyCode(c2.cookie, wrongCode(e.secret));
+      const text = JSON.stringify(await auditRows(e.orgId));
+      for (const secretish of [e.secret, b32Bytes(e.secret).toString("utf8"), code, e.email, ...e.backupCodes]) expect(text).not.toContain(secretish);
+      expect(text).not.toMatch(/otpauth|trust-device/i);
+    });
+
+    describe("break-glass reset (scripts/mfa-reset.mjs)", () => {
+      async function reset(email: string, apply: boolean) {
+        const { resetMfa } = await import("../../scripts/mfa-reset.mjs");
+        return resetMfa(ownerPool, email, { apply });
+      }
+
+      it("a dry run shows who would be reset and changes nothing", async () => {
+        const t = await enrolled("reset-dry");
+        const r = await reset(t.email.toUpperCase(), false);
+        expect(r).toMatchObject({ status: "dry_run", userId: t.userId, organizationId: t.orgId, mfaWasEnabled: true });
+        const [user] = await owner.select().from(schema.users).where(eq(schema.users.id, t.userId));
+        expect(user.twoFactorEnabled).toBe(true);
+        expect(await strictSession(t.cookie)).not.toBeNull();
+        expect(await auditRows(t.orgId, "auth.mfa_reset")).toHaveLength(0);
+      });
+
+      it("applying it removes the enrollment, signs out every session, revokes trusted devices, audits, and sends the person back to enrollment", async () => {
+        const e = await enrolled("reset-apply");
+        const c = await challenge(e.email);
+        const ok = await verifyCode(c.cookie, totpCode(e.secret), { trustDevice: true });
+        const trust = named(ok, "trust_device")!;
+        const r = await reset(e.email, true);
+        expect(r).toMatchObject({ status: "reset", userId: e.userId });
+        expect(await owner.select().from(schema.authTwoFactors).where(eq(schema.authTwoFactors.userId, e.userId))).toHaveLength(0);
+        const [user] = await owner.select().from(schema.users).where(eq(schema.users.id, e.userId));
+        expect(user.twoFactorEnabled).toBe(false);
+        expect(await sessionCount(e.userId)).toBe(0);
+        expect(await strictSession(e.cookie)).toBeNull();
+        const rows = await auditRows(e.orgId, "auth.mfa_reset");
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({ resourceId: e.userId, outcome: "success" });
+        // The row obeys the same rules as every other audit event.
+        const { buildAuditRow } = await import("@/lib/audit");
+        expect(() => buildAuditRow({ action: rows[0].action as never, resourceType: rows[0].resourceType, metadata: rows[0].metadata as Record<string, string> })).not.toThrow();
+        // Old trusted device is gone and so is the old authenticator: the password gives a gated session.
+        const again = await call("/sign-in/email", { body: { email: e.email, password: GOOD_PASSWORD }, cookie: trust });
+        const cookie = cookieFrom(again);
+        expect(((await again.json()) as { twoFactorRedirect?: boolean }).twoFactorRedirect).toBeUndefined();
+        expect(await strictSession(cookie)).toBeNull();
+        expect(await session(cookie)).not.toBeNull();
+      });
+
+      it("an unknown address resets nothing", async () => {
+        expect(await reset(emailFor("nobody"), true)).toEqual({ status: "not_found" });
+      });
+    });
+  });
+
   describe("rate limits (audit 03 item 4)", () => {
     it("sign-in: the 6th attempt from one address in 15 minutes gets 429, even with the right password; another address is unaffected", async () => {
       const orgId = await seedOrg("rl-signin");
@@ -773,7 +1152,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
         void _action;
         const text = JSON.stringify(rest);
         // "method":"password" is the sign-in method, not a password; nothing else may look like one.
-        expect(text.replace('"method":"password"', "")).not.toMatch(/@example\.test|passphrase|password|token|Synthetic/i);
+        expect(text.replace(/"method":"password(\+[a-z_]+)?"/, "")).not.toMatch(/@example\.test|passphrase|password|token|Synthetic/i);
       }
     });
 
