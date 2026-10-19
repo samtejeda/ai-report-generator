@@ -57,6 +57,24 @@ Set `AUTH_DATABASE_URL` (pooled host) to that role; the password goes straight i
 - **Expired sessions and tokens are not purged automatically yet** (Better Auth removes them when they are touched). A scheduled cleanup of `auth_sessions`, `auth_verifications` and `auth_rate_limits` rows past `expires_at` / old `last_request` is a follow-up; none of these hold PHI.
 - **Email:** only the console transport exists, which the environment schema refuses in production. Until a real transport is approved and added, a deployed environment cannot send verification or reset mail; the owner is bootstrapped with a verified address instead.
 
+## Two-step sign-in (MFA, migration 0008)
+
+Every role must set up an authenticator app. The secret and the ten one-time backup codes are stored **encrypted** in `auth_two_factors` with a key derived from `BETTER_AUTH_SECRET`; only `auth_runtime` can read the table, and only `auth_runtime` can set `users.two_factor_enabled`.
+
+- **Rotating `BETTER_AUTH_SECRET` invalidates every enrollment** (the stored secrets can no longer be decrypted) as well as every cookie. Do not rotate it casually. If it must change, plan for every user to be reset with the script below and to enroll again; there is no re-encryption tool.
+- **A user lost their phone but still has a backup code:** they can sign in with "Use a backup code instead" (each code works once). There is no screen yet to replace the authenticator on a working account; to move to a new phone, run the reset below, then enroll again.
+- **A user lost the phone and the backup codes (or the owner did): break-glass reset.** Run on a machine you trust, with `DATABASE_URL_UNPOOLED` (the owner credential) in `.env.local`:
+
+  ```
+  node scripts/mfa-reset.mjs person@example.com          # dry run: prints the database host and who it would reset
+  node scripts/mfa-reset.mjs person@example.com --apply  # does it
+  ```
+
+  Check the printed host is the database you mean, and confirm the person's identity by a channel other than email first. It removes the enrollment, turns the MFA flag off, deletes every session of the user, revokes every trusted device and pending link, and writes an `auth.mfa_reset` audit row (no actor user: the operator is the database owner). The password is untouched, so the person signs in with it and is sent to set up a new phone. If the account is also locked out of its password, use the normal password reset first.
+- **The MFA step is locked** (5 wrong codes in a row): it clears on its own after 15 minutes. To clear it early (owner role): `UPDATE auth_two_factors SET failed_verification_count = 0, locked_until = NULL WHERE user_id = '<uuid>';`.
+- **Trusted devices** are rows in `auth_verifications` whose `value` is the user id. Revoke one user's devices with `DELETE FROM auth_verifications WHERE value = '<user uuid>';` (this also clears pending reset links). A password change, a password reset and the MFA reset do this automatically. A device in regular use stays trusted: the 14 days restart at every sign-in from it.
+- **Enrollment race:** the first sign-in of a new account has only a password in front of it, so whoever has the password and gets there first can enroll their own phone. The account owner gets an "Two-step sign-in was turned on" email at enrollment, so a hijack is visible; invitations (admin step) should hand out the first password only to the person who will enroll straight away.
+
 ## Row-level security (migration 0004)
 
 Every tenant table has a policy `tenant_isolation` for `app_runtime`: a row is visible and writable only when its `organization_id` equals `app_current_org()`, which reads `app.organization_id` set by `tenantDb` for the current transaction. With nothing set, no rows match. The table owner (the migration role) is deliberately not forced through the policies, so **the app must never connect as the owner**; if it did, RLS would not protect anything. To check a database by hand: `select relname, relrowsecurity from pg_class where relname in (...)` and `select tablename, roles from pg_policies where schemaname = 'public'` (14 tables, 14 policies). Debugging tip: if a query unexpectedly returns zero rows, the usual cause is a statement run outside `tenantDb` (no tenant bound), not missing data.
