@@ -2,6 +2,7 @@ import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 import type { NeonDatabase } from "drizzle-orm/neon-serverless";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import { z } from "zod";
+import { validateInferenceEndpoint } from "@/lib/inference-endpoint";
 import { getDb } from "./index";
 import * as s from "./schema";
 
@@ -234,9 +235,9 @@ export function tenantDb(ctx: TenantContext, db: Db = getDb()) {
       },
 
       /**
-       * Deliberately narrow: inference_endpoint and model_config are NOT settable here.
-       * They change only through a dedicated admin action that validates against the
-       * allow-list (audit 04 item 8).
+       * Deliberately narrow: inference_endpoint and model_config are NOT settable here, and
+       * since migration 0010 app_runtime has no UPDATE privilege on them at all. The endpoint
+       * changes only through setInferenceEndpoint() below (audit 04 item 8).
        */
       updateOrganization(patch: Partial<Pick<typeof s.organizations.$inferInsert, "name" | "type" | "state">>) {
         return run(
@@ -247,6 +248,26 @@ export function tenantDb(ctx: TenantContext, db: Db = getDb()) {
               .where(eq(s.organizations.id, orgId))
               .returning() as unknown as TenantQuery<(typeof s.organizations.$inferSelect)[]>,
         );
+      },
+
+      /**
+       * The ONLY way to set or clear this practice's inference_endpoint (audit 04 item 8).
+       * The value is checked against the allow-list here and again by the database CHECK
+       * constraint; the set_inference_endpoint() function refuses any organization other than
+       * the one this transaction is bound to. Callers must be an owner who signed in recently
+       * (the route enforces that); the value must come from a validated admin request body,
+       * never from an arbitrary request field. Throws without sending anything if refused.
+       */
+      async setInferenceEndpoint(endpoint: string | null): Promise<void> {
+        let value: string | null = null;
+        if (endpoint !== null) {
+          const checked = validateInferenceEndpoint(endpoint);
+          if (!checked.ok) throw new Error(`inference endpoint refused: ${checked.reason}`);
+          value = checked.endpoint;
+        }
+        const call = (e: Db) => e.execute(sql`select set_inference_endpoint(${orgId}::uuid, ${value}::text)`);
+        if (standalone) await inTenantTransaction(call);
+        else await call(exec);
       },
 
       /**

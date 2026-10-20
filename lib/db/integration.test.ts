@@ -582,4 +582,61 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
       await expect(tA.purgeClient("1; drop table clients")).rejects.toThrow(/UUID/);
     });
   });
+  describe("inference endpoint allow-list (audit 04 item 8; migration 0010)", () => {
+    const GOOD = "https://studio-mac.tail1234.ts.net/v1";
+
+    it("the app role cannot write inference_endpoint or model_config, even on its own organization", async () => {
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update organizations set inference_endpoint = ${GOOD} where id = ${A.orgId}`)), INSUFFICIENT_PRIVILEGE);
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update organizations set model_config = '{"worker":"x"}'::jsonb where id = ${A.orgId}`)), INSUFFICIENT_PRIVILEGE);
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update organizations set baa_signed_at = now() where id = ${A.orgId}`)), INSUFFICIENT_PRIVILEGE);
+      expect((await tA.organization())?.inferenceEndpoint).toBeNull();
+    });
+
+    it("the ordinary fields (name, type, state) are still writable through updateOrganization", async () => {
+      const [updated] = await tA.updateOrganization({ name: "Synthetic Org A" });
+      expect(updated.name).toBe("Synthetic Org A");
+    });
+
+    it("the database refuses a value outside the allow-list even from the table owner", async () => {
+      for (const bad of ["http://localhost:11434/v1", "https://169.254.169.254", "https://evil.example/.ts.net", "https://a.b.ts.net.evil.example", "http://a.b.ts.net", "https://A.b.ts.net", "https://xn--a.b.ts.net", "https://a.b.ts.net:11434"]) {
+        await expectPgError(owner.execute(sql`update organizations set inference_endpoint = ${bad} where id = ${A.orgId}`), CHECK_VIOLATION);
+      }
+      await expectPgError(owner.execute(sql`update organizations set inference_endpoint = ${"https://" + "a".repeat(250) + ".b.ts.net"} where id = ${A.orgId}`), CHECK_VIOLATION);
+      expect((await tA.organization())?.inferenceEndpoint).toBeNull();
+    });
+
+    it("setInferenceEndpoint sets and clears the endpoint for this organization only", async () => {
+      await tA.setInferenceEndpoint(GOOD);
+      expect((await tA.organization())?.inferenceEndpoint).toBe(GOOD);
+      expect((await tB.organization())?.inferenceEndpoint).toBeNull();
+      await tA.setInferenceEndpoint(null);
+      expect((await tA.organization())?.inferenceEndpoint).toBeNull();
+    });
+
+    it("a refused value changes nothing, whether the helper or the database says no", async () => {
+      await tA.setInferenceEndpoint(GOOD);
+      await expect(tA.setInferenceEndpoint("http://localhost:11434/v1")).rejects.toThrow(/inference endpoint refused/);
+      // Straight to the function, skipping the helper: the CHECK constraint is the backstop.
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`select set_inference_endpoint(${A.orgId}::uuid, 'http://169.254.169.254')`)), CHECK_VIOLATION);
+      expect((await tA.organization())?.inferenceEndpoint).toBe(GOOD);
+      await tA.setInferenceEndpoint(null);
+    });
+
+    it("the function refuses another organization, and refuses to run with no tenant bound", async () => {
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`select set_inference_endpoint(${B.orgId}::uuid, ${GOOD})`)), INSUFFICIENT_PRIVILEGE);
+      await expectPgError(app.execute(sql`select set_inference_endpoint(${A.orgId}::uuid, ${GOOD})`), INSUFFICIENT_PRIVILEGE);
+      expect((await tB.organization())?.inferenceEndpoint).toBeNull();
+      expect((await tA.organization())?.inferenceEndpoint).toBeNull();
+    });
+
+    it("only app_runtime may execute the function (not PUBLIC, not the auth role)", async () => {
+      const r = await owner.execute(sql`
+        select has_function_privilege('app_runtime', 'set_inference_endpoint(uuid,text)', 'EXECUTE') as app,
+               has_function_privilege('auth_runtime', 'set_inference_endpoint(uuid,text)', 'EXECUTE') as auth,
+               exists (select 1 from pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                       where p.proname = 'set_inference_endpoint' and a.grantee = 0) as public_can
+      `);
+      expect(r.rows[0]).toEqual({ app: true, auth: false, public_can: false });
+    });
+  });
 });

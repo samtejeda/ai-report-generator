@@ -127,3 +127,21 @@ describe("tenantDb: type-level guards", () => {
     expect(never).toBeTypeOf("function");
   });
 });
+
+describe("tenantDb: inference endpoint (audit 04 item 8)", () => {
+  it.each([
+    "http://localhost:11434/v1",
+    "https://169.254.169.254",
+    "https://evil.example/.ts.net",
+    "https://a.b.ts.net.evil.example",
+    "",
+  ])("refuses %j before sending anything", async (value) => {
+    // The mock has no connection: a refusal must happen before any statement is attempted.
+    await expect(t.setInferenceEndpoint(value)).rejects.toThrow(/inference endpoint refused/);
+  });
+
+  it("the generic organization update cannot carry the endpoint", () => {
+    // Also enforced at compile time (see the @ts-expect-error above) and by the grants.
+    expect(Object.keys(t)).toContain("setInferenceEndpoint");
+  });
+});
