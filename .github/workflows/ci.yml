@@ -5,7 +5,8 @@ on:
   push:
     branches: [main]
 
-# Read-only token; CI needs no repo secrets and never touches Neon.
+# Read-only token. The required `checks` job needs no secrets and never touches Neon. Only the
+# separate, advisory `integration` job below holds a database secret (a CI-only Neon project).
 permissions:
   contents: read
 
@@ -67,6 +68,87 @@ jobs:
           # part of the app's env schema and CI never needs it.
           DATABASE_URL: postgresql://u:p@h/d
           NEXT_TELEMETRY_DISABLED: "1"
+
+  # Database integration suites against a CI-ONLY Neon project (synthetic data, its own owner
+  # password; it is NOT the dev project, whose owner login is shared by every branch in it).
+  # Advisory: not a required check until it has been green on a few PRs (PROGRESS.md).
+  # Safety: `pull_request` only (never `pull_request_target`), same-repo PRs only, Dependabot
+  # skipped, and the secret is visible to the migrate and test steps only, never to `npm ci`.
+  integration:
+    name: integration
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    # One run at a time: the suites share one database. Never cancel one mid-run.
+    concurrency:
+      group: integration-db
+      cancel-in-progress: false
+    steps:
+      - name: Gate (is the CI database secret present?)
+        id: gate
+        env:
+          CI_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
+        run: |
+          if [ -n "$CI_DATABASE_URL" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"; else echo "enabled=false" >> "$GITHUB_OUTPUT"; echo "No CI_DATABASE_URL secret: integration suites skipped."; fi
+
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.enabled == 'true'
+
+      - uses: actions/setup-node@v7
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          node-version: 24
+          cache: npm
+
+      # Same supply-chain guards as `checks`, so no install script runs before they pass.
+      - name: Lockfile sources and install-script allowlist (before install)
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          node scripts/ci/check-lockfile-registry.mjs
+          node scripts/ci/check-install-scripts.mjs lockfile
+
+      - name: Install
+        if: steps.gate.outputs.enabled == 'true'
+        run: npm ci
+
+      # The database URL is set on these steps only. drizzle.config.ts reads DATABASE_URL_UNPOOLED.
+      - name: Apply migrations to the CI database
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          DATABASE_URL_UNPOOLED: ${{ secrets.CI_DATABASE_URL }}
+        run: npm run db:migrate
+
+      # The suites create their own login roles with this password. A new random one per run,
+      # masked in the log, so there is no second secret to store or rotate.
+      - name: Generate the throwaway role password
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          pw="$(openssl rand -hex 24)"
+          echo "::add-mask::$pw"
+          echo "TEST_APP_ROLE_PASSWORD=$pw" >> "$GITHUB_ENV"
+
+      # One file per step, so a failure names the suite; each runs even if an earlier one failed.
+      - name: Integration tests (database layer)
+        if: ${{ !cancelled() && steps.gate.outputs.enabled == 'true' }}
+        env:
+          TEST_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
+        run: npx vitest run lib/db/integration.test.ts
+
+      - name: Integration tests (authentication)
+        if: ${{ !cancelled() && steps.gate.outputs.enabled == 'true' }}
+        env:
+          TEST_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
+        run: npx vitest run lib/auth/auth.integration.test.ts
+
+      - name: Integration tests (authorization through the real routes)
+        if: ${{ !cancelled() && steps.gate.outputs.enabled == 'true' }}
+        env:
+          TEST_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
+        run: npx vitest run lib/auth/authz.integration.test.ts
 
   # Reports added, removed and changed packages on the PR and fails on newly introduced
   # high-severity advisories. A separate job so the required `checks` job keeps its
