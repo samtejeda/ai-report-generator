@@ -45,7 +45,7 @@ const OWN_CHECK_PAGES: Record<string, string> = {
 
 describe("route handlers", () => {
   it("the scan finds the routes we know about (guards against it silently finding nothing)", () => {
-    expect(routes.map(urlPath).sort()).toEqual(["/api/admin/inference-endpoint", "/api/auth", "/api/clients", "/api/clients/{id}", "/api/health", "/api/me"]);
+    expect(routes.map(urlPath).sort()).toEqual(["/api/admin/inference-endpoint", "/api/admin/users", "/api/admin/users/{id}", "/api/admin/users/{id}/deactivate", "/api/admin/users/{id}/reactivate", "/api/auth", "/api/clients", "/api/clients/{id}", "/api/health", "/api/me"]);
   });
 
   const publicApiPaths = new Set(PUBLIC_API.map((a) => a.path));

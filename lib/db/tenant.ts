@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import type { NeonDatabase } from "drizzle-orm/neon-serverless";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import { z } from "zod";
@@ -182,8 +182,12 @@ export function tenantDb(ctx: TenantContext, db: Db = getDb()) {
         );
       },
 
-      /** Empty result means "not found in this organization" (respond 404). */
-      update<T extends UpdatableTable>(table: T, id: string, patch: UpdateRow<T>): TenantQuery<Row<T>[]> {
+      /**
+       * Empty result means "not found in this organization" (respond 404), or, when `guard` is
+       * given, "found but no longer in the state the caller checked": the guard is ANDed into the
+       * same statement, so a check made a moment earlier cannot be raced (compare-and-set).
+       */
+      update<T extends UpdatableTable>(table: T, id: string, patch: UpdateRow<T>, guard?: SQL): TenantQuery<Row<T>[]> {
         assertUuid(id, "id");
         for (const key of FORBIDDEN_UPDATE_KEYS) {
           if (key in (patch as object)) throw new Error(`${key} cannot be updated`);
@@ -193,7 +197,7 @@ export function tenantDb(ctx: TenantContext, db: Db = getDb()) {
             e
               .update(table as PgTable)
               .set(patch as never)
-              .where(scope(table, [eq(cols(table).id, id)]))
+              .where(scope(table, [eq(cols(table).id, id), guard]))
               .returning() as unknown as TenantQuery<Row<T>[]>,
         );
       },
@@ -206,6 +210,19 @@ export function tenantDb(ctx: TenantContext, db: Db = getDb()) {
               .update(table as PgTable)
               .set({ deletedAt: new Date() } as never)
               .where(scope(table, [eq(cols(table).id, id)]))
+              .returning() as unknown as TenantQuery<Row<T>[]>,
+        );
+      },
+
+      /** Undoes a soft delete (clears deleted_at). Empty result means not found in this organization. */
+      restore<T extends SoftDeleteTable>(table: T, id: string, guard?: SQL): TenantQuery<Row<T>[]> {
+        assertUuid(id, "id");
+        return run(
+          (e) =>
+            e
+              .update(table as PgTable)
+              .set({ deletedAt: null } as never)
+              .where(scope(table, [eq(cols(table).id, id), isNotNull(cols(table).deletedAt), guard], true))
               .returning() as unknown as TenantQuery<Row<T>[]>,
         );
       },

@@ -12,6 +12,7 @@ const MESSAGES = {
   forbidden_origin: "This request came from an unexpected origin.",
   reauth_required: "Sign in again to do this.",
   not_found: "Not found.",
+  conflict: "This conflicts with the current state. Reload and try again.",
   internal_error: "Something went wrong.",
 } as const;
 
@@ -24,6 +25,7 @@ const STATUS: Record<ApiErrorCode, number> = {
   forbidden_origin: 403,
   reauth_required: 403,
   not_found: 404,
+  conflict: 409,
   internal_error: 500,
 };
 

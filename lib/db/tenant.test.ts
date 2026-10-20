@@ -145,3 +145,38 @@ describe("tenantDb: inference endpoint (audit 04 item 8)", () => {
     expect(Object.keys(t)).toContain("setInferenceEndpoint");
   });
 });
+
+describe("tenantDb: compare-and-set guard and restore", () => {
+  const guard = eq(schema.users.role, "associate");
+
+  it("a guard is ANDed into the same statement as the organization and id filters", () => {
+    const q = t.update(schema.users, ID, { role: "admin" }, guard).toSQL();
+    expect(q.sql).toMatch(/where \("users"\."organization_id" = \$\d+ and "users"\."deleted_at" is null and "users"\."id" = \$\d+ and "users"\."role" = \$\d+/);
+    expect(q.params).toContain(ORG);
+    expect(q.params).toContain("associate");
+  });
+
+  it("without a guard the statement is unchanged (organization, not deleted, id)", () => {
+    const q = t.update(schema.users, ID, { role: "admin" }).toSQL();
+    expect(q.sql).not.toMatch(/"users"\."role" = \$/);
+  });
+
+  it("restore only touches a soft-deleted row of this organization, and sets deleted_at to null", () => {
+    const q = t.restore(schema.users, ID, guard).toSQL();
+    expect(q.sql).toMatch(/set "deleted_at" = \$\d+/);
+    expect(q.sql).toContain('"users"."organization_id" = $');
+    expect(q.sql).toContain('"users"."deleted_at" is not null');
+    expect(q.sql).not.toContain('"deleted_at" is null');
+    expect(q.params).toContain(ORG);
+    expect(q.params).toContain(null);
+  });
+
+  it("restore rejects a malformed id before any SQL, and a table without deleted_at at compile time", () => {
+    expect(() => t.restore(schema.users, "1; drop table users")).toThrow(/UUID/);
+    const never = () => {
+      // @ts-expect-error report_sections has no deleted_at
+      t.restore(schema.reportSections, ID);
+    };
+    expect(never).toBeTypeOf("function");
+  });
+});

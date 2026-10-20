@@ -78,6 +78,13 @@
       "when": 1792517916721,
       "tag": "0010_org_settings_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792518528644,
+      "tag": "0011_users_keep_an_owner",
+      "breakpoints": true
     }
   ]
 }

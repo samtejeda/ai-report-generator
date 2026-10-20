@@ -217,7 +217,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
       expect(setCookie).toMatch(/Max-Age=43200/); // 12 h
       expect(setCookie).toMatch(/Path=\//);
       const ctx = await session(cookie);
-      expect(ctx).toEqual({ userId: u.userId, organizationId: orgId, role: "owner" });
+      expect(ctx).toEqual({ userId: u.userId, organizationId: orgId, role: "owner", signedInAt: expect.any(Date) });
     });
 
     it("sets the idle deadline to 2 hours, not the 12 hour cap", async () => {
@@ -413,13 +413,13 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
 
     it("reads role and organization from the database on every request", async () => {
       const u = await login("role-change", { role: "associate" });
-      expect(await session(u.cookie)).toEqual({ userId: u.userId, organizationId: u.orgId, role: "associate" });
+      expect(await session(u.cookie)).toEqual({ userId: u.userId, organizationId: u.orgId, role: "associate", signedInAt: expect.any(Date) });
       await owner.update(schema.users).set({ role: "admin" }).where(eq(schema.users.id, u.userId));
-      expect(await session(u.cookie)).toEqual({ userId: u.userId, organizationId: u.orgId, role: "admin" });
+      expect(await session(u.cookie)).toEqual({ userId: u.userId, organizationId: u.orgId, role: "admin", signedInAt: expect.any(Date) });
     });
 
     it("a user deactivated mid-session loses the session and all others", async () => {
-      const u = await login("deactivate-midway");
+      const u = await login("deactivate-midway", { role: "associate" });
       const second = await signIn(u.email);
       expect(second.cookie).not.toBe("");
       await owner.update(schema.users).set({ deletedAt: new Date() }).where(eq(schema.users.id, u.userId));
@@ -660,7 +660,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
       const { res, cookie } = await signIn(u.email);
       expect(res.status).toBe(200);
       expect(await strictSession(cookie)).toBeNull();
-      expect(await session(cookie)).toEqual({ userId: u.userId, organizationId: orgId, role: "owner" });
+      expect(await session(cookie)).toEqual({ userId: u.userId, organizationId: orgId, role: "owner", signedInAt: expect.any(Date) });
     });
 
     it("starting enrollment needs the password again, stores the secret and backup codes encrypted, and does not turn MFA on yet", async () => {
@@ -697,7 +697,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
       const e = await enrolled("mfa-enroll");
       const [user] = await owner.select().from(schema.users).where(eq(schema.users.id, e.userId));
       expect(user.twoFactorEnabled).toBe(true);
-      expect(await strictSession(e.cookie)).toEqual({ userId: e.userId, organizationId: e.orgId, role: "owner" });
+      expect(await strictSession(e.cookie)).toEqual({ userId: e.userId, organizationId: e.orgId, role: "owner", signedInAt: expect.any(Date) });
       expect(await strictSession(e.firstCookie)).toBeNull(); // the pre-MFA session was replaced
       expect((await mailTo(e.email, /two-step sign-in was turned on/i)).length).toBe(1);
       expect(await auditRows(e.orgId, "auth.mfa_enrolled")).toHaveLength(1);
@@ -731,7 +731,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
 
       const ok = await verifyCode(c.cookie, totpCode(e.secret));
       expect(ok.status).toBe(200);
-      expect(await strictSession(cookieFrom(ok))).toEqual({ userId: e.userId, organizationId: e.orgId, role: "owner" });
+      expect(await strictSession(cookieFrom(ok))).toEqual({ userId: e.userId, organizationId: e.orgId, role: "owner", signedInAt: expect.any(Date) });
       const logins = await auditRows(e.orgId, "auth.login");
       expect(logins).toHaveLength(loginsBefore + 1);
       expect(logins.at(-1)!.metadata).toMatchObject({ method: "password+totp" });
@@ -854,7 +854,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
         expect(await auditRows(t.orgId, "auth.mfa_device_trusted")).toHaveLength(1);
         const again = await challenge(t.email, t.trust);
         expect(again.body.twoFactorRedirect).toBeUndefined();
-        expect(await strictSession(again.cookie)).toEqual({ userId: t.userId, organizationId: t.orgId, role: "owner" });
+        expect(await strictSession(again.cookie)).toEqual({ userId: t.userId, organizationId: t.orgId, role: "owner", signedInAt: expect.any(Date) });
         const logins = await auditRows(t.orgId, "auth.login");
         expect(logins.at(-1)!.metadata).toMatchObject({ method: "password+trusted_device" });
         // The trust cookie is not a login: a wrong password with it gets nothing.
@@ -1092,7 +1092,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
     it("email is unique across practices, case does not matter, and a deactivated user keeps their address", async () => {
       const orgA = await seedOrg("uniq-a");
       const orgB = await seedOrg("uniq-b");
-      const u = await seedUser(orgA, "uniq");
+      const u = await seedUser(orgA, "uniq", { role: "associate" }); // not the practice's only owner: it gets deactivated below
       await expectPgError(
         owner.insert(schema.users).values({ organizationId: orgB, email: u.email, displayName: "dup", role: "owner" }),
         UNIQUE_VIOLATION,

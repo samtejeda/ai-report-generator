@@ -639,4 +639,84 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
       expect(r.rows[0]).toEqual({ app: true, auth: false, public_can: false });
     });
   });
+  describe("a practice keeps an owner (migration 0011)", () => {
+    // A fresh practice per test so the counts are exact.
+    async function practice(label: string, owners: number) {
+      const [org] = await owner.insert(schema.organizations).values({ name: `Synthetic Org ${label}` }).returning();
+      const t = tenantDb({ organizationId: org.id }, owner);
+      const made: string[] = [];
+      for (let i = 0; i < owners; i++) {
+        const [u] = await t.insert(schema.users, { email: `${label}-${i}-${org.id}@example.test`, displayName: `Synthetic ${label} ${i}`, role: "owner" });
+        made.push(u.id);
+      }
+      return { orgId: org.id, owners: made };
+    }
+    const activeOwners = async (orgId: string) =>
+      (await owner.execute(sql`select id from users where organization_id = ${orgId} and role = 'owner' and deleted_at is null`)).rows.length;
+
+    it("the only owner cannot be demoted or deactivated, by anyone, in any role", async () => {
+      const p = await practice("keep1", 1);
+      await expectPgError(owner.execute(sql`update users set role = 'admin' where id = ${p.owners[0]}`), RESTRICT_VIOLATION);
+      await expectPgError(owner.execute(sql`update users set deleted_at = now() where id = ${p.owners[0]}`), RESTRICT_VIOLATION);
+      // As the application role, through tenantDb, the same.
+      const tp = tenantDb({ organizationId: p.orgId }, app);
+      await expectPgError(tp.update(schema.users, p.owners[0], { role: "associate" }), RESTRICT_VIOLATION);
+      await expectPgError(tp.update(schema.users, p.owners[0], { deletedAt: new Date() }), RESTRICT_VIOLATION);
+      expect(await activeOwners(p.orgId)).toBe(1);
+    });
+
+    it("with a second owner one can step down, and then the remaining one is protected", async () => {
+      const p = await practice("keep2", 2);
+      await owner.execute(sql`update users set role = 'admin' where id = ${p.owners[0]}`);
+      expect(await activeOwners(p.orgId)).toBe(1);
+      await expectPgError(owner.execute(sql`update users set deleted_at = now() where id = ${p.owners[1]}`), RESTRICT_VIOLATION);
+      // Promoting someone else first makes it possible again.
+      await owner.execute(sql`update users set role = 'owner' where id = ${p.owners[0]}`);
+      await owner.execute(sql`update users set deleted_at = now() where id = ${p.owners[1]}`);
+      expect(await activeOwners(p.orgId)).toBe(1);
+    });
+
+    it("a deactivated owner does not count, and changing other people or other columns is never blocked", async () => {
+      const p = await practice("keep3", 2);
+      const t = tenantDb({ organizationId: p.orgId }, owner);
+      const [assoc] = await t.insert(schema.users, { email: `keep3-assoc-${p.orgId}@example.test`, displayName: "Synthetic assoc", role: "associate" });
+      await owner.execute(sql`update users set deleted_at = now() where id = ${p.owners[1]}`);
+      await expectPgError(owner.execute(sql`update users set role = 'admin' where id = ${p.owners[0]}`), RESTRICT_VIOLATION);
+      await owner.execute(sql`update users set role = 'admin', display_name = 'Synthetic renamed' where id = ${assoc.id}`);
+      await owner.execute(sql`update users set display_name = 'Synthetic owner renamed' where id = ${p.owners[0]}`);
+      // A deactivated owner can be restored and changed freely: it does not count as an owner.
+      await owner.execute(sql`update users set deleted_at = null where id = ${p.owners[1]}`);
+      expect(await activeOwners(p.orgId)).toBe(2);
+    });
+
+    it("another practice's owners do not count", async () => {
+      const a = await practice("keep4a", 1);
+      await practice("keep4b", 3);
+      await expectPgError(owner.execute(sql`update users set role = 'admin' where id = ${a.owners[0]}`), RESTRICT_VIOLATION);
+    });
+
+    it("two owners demoting each other at the same moment: the second is refused (advisory lock)", async () => {
+      const p = await practice("keep5", 2);
+      const [a, b] = p.owners;
+      const c1 = await ownerPool.connect();
+      const c2 = await ownerPool.connect();
+      try {
+        await c1.query("begin");
+        await c1.query("update users set role = 'associate' where id = $1", [b]);
+        // c1 holds the practice's owner lock until it commits, so c2 has to wait for it.
+        const second = c2.query("update users set role = 'associate' where id = $1", [a]).then(
+          () => "succeeded" as const,
+          (e: unknown) => pgCode(e) ?? "failed",
+        );
+        await new Promise((r) => setTimeout(r, 1500));
+        await c1.query("commit");
+        expect(await second).toBe(RESTRICT_VIOLATION);
+      } finally {
+        await c1.query("rollback").catch(() => {});
+        c1.release();
+        c2.release();
+      }
+      expect(await activeOwners(p.orgId)).toBe(1);
+    });
+  });
 });
