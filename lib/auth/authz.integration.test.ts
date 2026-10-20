@@ -367,9 +367,13 @@ describe.skipIf(!ENABLED)("authorization through the real routes (Neon test bran
     it("demotion and promotion apply on the next request with the same cookie", async () => {
       expect(ids(await list(flipper))).toEqual([c1]); // associate
       await owner.update(schema.users).set({ role: "admin" }).where(eq(schema.users.id, flipper.userId));
-      expect((await list(flipper)).status).toBe(403);
-      expect((await one(flipper, c1)).status).toBe(403);
+      // The role changed on the very next request, and what a person sees is decided by their
+      // assignments, not their role label: as an admin they keep exactly the client they were
+      // assigned (no more than before, so no escalation), and none of the others.
       expect((await get(flipper, meGET, "/api/me")).json.role).toBe("admin");
+      expect(ids(await list(flipper))).toEqual([c1]);
+      expect((await one(flipper, c1)).status).toBe(200);
+      expect((await one(flipper, c2)).status).toBe(404);
       await owner.update(schema.users).set({ role: "owner" }).where(eq(schema.users.id, flipper.userId));
       expect(ids(await list(flipper))).toEqual([c1, c2, c3, c4].sort()); // owner: the whole practice
       await owner.update(schema.users).set({ role: "associate" }).where(eq(schema.users.id, flipper.userId));
@@ -378,19 +382,19 @@ describe.skipIf(!ENABLED)("authorization through the real routes (Neon test bran
   });
 
   // ---------------------------------------------------------------------------------------
-  describe("admin: no clinical content (option A)", () => {
-    it("is refused on the client routes with 403 and no client data in the response", async () => {
+  describe("admin: no clinical content unless granted (per-client grant, Sam 2026-10-20)", () => {
+    it("with no grant it sees nothing: an empty list, and a 404 for every id, with no client data", async () => {
       const l = await list(adminA);
-      const o = await one(adminA, c1);
-      for (const r of [l, o]) {
-        expect(r.status).toBe(403);
-        expect(r.json).toEqual({ error: { code: "forbidden", message: "You do not have access to this." } });
-        expect(r.text).not.toContain("Synthetic Child");
-        expect(r.text).not.toContain(c1);
-      }
+      expect(l.status).toBe(200);
+      expect(l.json.data).toEqual([]);
+      expect(l.text).not.toContain("Synthetic Child");
+      const real = await one(adminA, c1);
+      expect(real.status).toBe(404);
+      expect(real.text).not.toContain("Synthetic Child");
+      expect(real.text).not.toContain(c1);
     });
 
-    it("is not told whether a client exists: the same 403 for a real id, another practice's id and a made-up one", async () => {
+    it("is not told whether a client exists: the same 404 for a real id, another practice's id and a made-up one", async () => {
       const real = await one(adminA, c1);
       for (const id of [b1, crypto.randomUUID()]) expect((await one(adminA, id)).json).toEqual(real.json);
     });
@@ -399,14 +403,9 @@ describe.skipIf(!ENABLED)("authorization through the real routes (Neon test bran
       expect((await get(adminA, meGET, "/api/me")).json).toEqual({ id: adminA.userId, role: "admin" });
     });
 
-    it("each refusal is audited with the role and a fixed reason, and no client data", async () => {
-      const rows = await auditRows(orgA, "authz.denied");
-      const mine = rows.filter((r) => r.actorUserId === adminA.userId);
-      expect(mine.length).toBeGreaterThanOrEqual(3);
-      for (const row of mine) {
-        expect(row).toMatchObject({ outcome: "denied", resourceType: "client" });
-        expect(row.metadata).toEqual({ role: "admin", reason: "role_not_allowed" });
-      }
+    it("is not refused by the guard (the query decides), so nothing is audited as denied on the client routes", async () => {
+      const mine = (await auditRows(orgA, "authz.denied")).filter((r) => r.actorUserId === adminA.userId && r.resourceType === "client");
+      expect(mine).toHaveLength(0);
     });
   });
 

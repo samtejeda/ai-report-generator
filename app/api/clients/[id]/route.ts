@@ -6,11 +6,11 @@ import { getClient } from "@/lib/db/client-access";
 
 const params = z.object({ id: z.uuid() });
 
-// One client, if the caller may see it. A client in another practice, one the associate is not
-// assigned to, and one that does not exist all answer the same 404, so the response never
+// One client, if the caller may see it. A client in another practice, one the associate or admin is
+// not assigned to, and one that does not exist all answer the same 404, so the response never
 // confirms that an id exists. Viewing a client is a sensitive read and is audited (ids only).
 export const GET = guardedRoute<{ id: string }>({
-  roles: ["owner", "associate"],
+  roles: ["owner", "associate", "admin"],
   resource: "client",
   handler: async ({ session, params: rawParams }) => {
     const parsed = params.safeParse(rawParams);

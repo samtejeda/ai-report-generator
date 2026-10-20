@@ -9,7 +9,7 @@ export const metadata: Metadata = { title: "Clients", robots: { index: false } }
 // Plain, unstyled list (two-pass UI: restyling is a separate pass). Layer 3: the page checks the
 // role itself, then reads through the query that only returns clients this caller may see.
 async function ClientList() {
-  const session = await requireRole("owner", "associate");
+  const session = await requireRole("owner", "associate", "admin");
   const clients = await listClients(session);
   await audit(
     { organizationId: session.organizationId, actorUserId: session.userId },

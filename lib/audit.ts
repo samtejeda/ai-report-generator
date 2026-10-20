@@ -42,6 +42,8 @@ export const AUDIT_ACTIONS = [
   "user.role_changed",
   "user.deactivated",
   "user.reactivated",
+  "assignment.created",
+  "assignment.ended",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 

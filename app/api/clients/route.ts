@@ -11,11 +11,11 @@ const query = z
   })
   .strict();
 
-// Clients the caller may see: the owner's whole practice, an associate's assigned clients. An
-// admin is refused by the guard (403, audited). The visibility rule itself lives in the query
-// (lib/db/client-access.ts), so it holds even if this handler is edited.
+// Clients the caller may see: the owner's whole practice; an associate's or an admin's assigned
+// clients (an admin with no grant gets an empty list). The visibility rule itself lives in the
+// query (lib/db/client-access.ts), so it holds even if this handler is edited.
 export const GET = guardedRoute({
-  roles: ["owner", "associate"],
+  roles: ["owner", "associate", "admin"],
   resource: "client",
   handler: async ({ request, session }) => {
     const parsed = query.safeParse(Object.fromEntries(new URL(request.url).searchParams));

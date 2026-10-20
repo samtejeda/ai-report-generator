@@ -19,11 +19,16 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
   let deactivateRoute: { POST: Handler };
   let reactivateRoute: { POST: Handler };
   let meRoute: { GET: Handler };
+  let assignmentsRoute: { GET: Handler; POST: Handler };
+  let assignmentRoute: { DELETE: Handler };
+  let clientsRoute: { GET: Handler };
+  let clientRoute: { GET: Handler };
 
   let orgA: string;
   let orgB: string;
   let ownerA: Person, adminA: Person, assocA: Person, subject1: Person, subject2: Person, ownerA2: Person;
   let ownerB: Person, adminB: Person, assocB: Person;
+  let deactivatedFixtureId = ""; // a deactivated person the assignment tests add to practice A
 
   const GOOD = "https://studio-mac.tail1234.ts.net/v1";
   const GOOD_B = "https://office-pc.tail9999.ts.net";
@@ -46,6 +51,10 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
     deactivateRoute = (await import("@/app/api/admin/users/[id]/deactivate/route")) as unknown as { POST: Handler };
     reactivateRoute = (await import("@/app/api/admin/users/[id]/reactivate/route")) as unknown as { POST: Handler };
     meRoute = (await import("@/app/api/me/route")) as unknown as { GET: Handler };
+    assignmentsRoute = (await import("@/app/api/admin/assignments/route")) as unknown as { GET: Handler; POST: Handler };
+    assignmentRoute = (await import("@/app/api/admin/assignments/[id]/route")) as unknown as { DELETE: Handler };
+    clientsRoute = (await import("@/app/api/clients/route")) as unknown as { GET: Handler };
+    clientRoute = (await import("@/app/api/clients/[id]/route")) as unknown as { GET: Handler };
 
     orgA = await h.seedOrg("admin-A");
     orgB = await h.seedOrg("admin-B");
@@ -208,6 +217,229 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
   });
 
   // ---------------------------------------------------------------------------------------
+  describe("assignments and the admin grant (owner only)", () => {
+    type Who = Pick<Person, "label" | "orgId"> & { cookie?: string };
+    const NAME = (s: string) => `Synthetic Child ${s}`;
+    const listA = (who: Who, qs = "") => h.call(who, assignmentsRoute.GET, { path: `/api/admin/assignments${qs}` });
+    const grant = (who: Who, body: unknown, o: { origin?: string | null; rawBody?: string; headers?: Record<string, string> } = {}) =>
+      h.call(who, assignmentsRoute.POST, { method: "POST", path: "/api/admin/assignments", body, ...o });
+    const end = (who: Who, id: string) => h.call(who, assignmentRoute.DELETE, { method: "DELETE", path: `/api/admin/assignments/${id}`, params: { id } });
+    const clientList = (who: Who) => h.call(who, clientsRoute.GET, { path: "/api/clients" });
+    const clientOne = (who: Who, id: string) => h.call(who, clientRoute.GET, { path: `/api/clients/${id}`, params: { id } });
+    const clientIds = (r: { json: { data?: unknown } }) => (r.json.data as { id: string }[]).map((c) => c.id).sort();
+    const rowsFor = (clientId: string) => h.owner.select().from(schema.clientAssignments).where(eq(schema.clientAssignments.clientId, clientId));
+    const MISSING = "00000000-0000-4000-8000-00000000beef";
+
+    async function addClient(orgId: string, label: string, deleted = false): Promise<string> {
+      const [row] = await h.owner.insert(schema.clients).values({ organizationId: orgId, displayName: NAME(label), gradeLevel: "3", deletedAt: deleted ? new Date() : null }).returning();
+      return row.id;
+    }
+
+    let c1: string, c2: string, c3: string, cGone: string, b1: string, b2: string;
+    let grantC1Admin: string;
+
+    beforeAll(async () => {
+      [c1, c2, c3, cGone] = [await addClient(orgA, "A1"), await addClient(orgA, "A2"), await addClient(orgA, "A3"), await addClient(orgA, "A-gone", true)];
+      [b1, b2] = [await addClient(orgB, "B1"), await addClient(orgB, "B2")];
+    });
+
+    it("no session is 401; an associate and an admin are 403 and audited; nothing is created or ended", async () => {
+      const nobody = { label: "nobody", orgId: "none" };
+      expect((await listA(nobody)).status).toBe(401);
+      expect((await grant(nobody, { clientId: c1, userId: adminA.userId })).status).toBe(401);
+      expect((await end(nobody, MISSING)).status).toBe(401);
+      for (const who of [assocA, adminA]) {
+        for (const r of [await listA(who), await grant(who, { clientId: c1, userId: who.userId }), await end(who, MISSING)]) {
+          expect(r.status, who.label).toBe(403);
+          expect(r.json.error?.code).toBe("forbidden");
+        }
+      }
+      expect(await rowsFor(c1)).toHaveLength(0);
+      const denied = (await auditRows(orgA, "authz.denied")).filter((x) => x.resourceType === "client_assignment");
+      expect(denied.filter((d) => d.actorUserId === adminA.userId)).toHaveLength(3);
+      expect(denied.filter((d) => d.actorUserId === assocA.userId)).toHaveLength(3);
+    });
+
+    it("before any grant, an admin and an associate see nothing: an empty list and the same 404 for every id", async () => {
+      for (const who of [adminA, assocA]) {
+        const l = await clientList(who);
+        expect(l.status, who.label).toBe(200);
+        expect(l.json.data).toEqual([]);
+        const real = await clientOne(who, c1);
+        expect(real.status).toBe(404);
+        for (const id of [b1, MISSING, cGone]) expect((await clientOne(who, id)).json).toEqual(real.json);
+        expect(real.text).not.toContain(NAME("A1"));
+      }
+      expect(clientIds(await clientList(ownerA))).toEqual([c1, c2, c3].sort()); // the owner sees the practice
+    });
+
+    it("the owner grants a client to an admin: 201, ids only, audited; the admin then sees exactly that client", async () => {
+      const r = await grant(ownerA, { clientId: c1, userId: adminA.userId });
+      expect(r.status).toBe(201);
+      const data = r.json.data as Record<string, unknown>;
+      expect(Object.keys(data).sort()).toEqual(["assignedByUserId", "clientId", "createdAt", "id", "userId"]);
+      expect(data).toMatchObject({ clientId: c1, userId: adminA.userId, assignedByUserId: ownerA.userId });
+      expect(r.text).not.toContain("Synthetic");
+      grantC1Admin = data.id as string;
+      const rows = await auditRows(orgA, "assignment.created");
+      const mine = rows.filter((x) => x.resourceId === grantC1Admin);
+      expect(mine).toHaveLength(1);
+      expect(mine[0]).toMatchObject({ actorUserId: ownerA.userId, resourceType: "client_assignment", metadata: { role: "admin" } });
+      expect(JSON.stringify(mine[0])).not.toMatch(/Synthetic|example\.test/);
+
+      // The grant applies on the very next request, with the same cookie, and reaches nothing else.
+      expect(clientIds(await clientList(adminA))).toEqual([c1]);
+      const one = await clientOne(adminA, c1);
+      expect(one.status).toBe(200);
+      expect((one.json.data as { displayName: string }).displayName).toBe(NAME("A1"));
+      expect((await clientOne(adminA, c2)).status).toBe(404);
+      expect((await clientOne(adminA, b1)).status).toBe(404);
+    });
+
+    it("the same assignment works for an associate, and each sees only their own", async () => {
+      expect((await grant(ownerA, { clientId: c2, userId: assocA.userId })).status).toBe(201);
+      expect(clientIds(await clientList(assocA))).toEqual([c2]);
+      expect(clientIds(await clientList(adminA))).toEqual([c1]);
+    });
+
+    it("an existing active assignment is a 409 and creates no second row", async () => {
+      const r = await grant(ownerA, { clientId: c1, userId: adminA.userId });
+      expect(r.status).toBe(409);
+      expect(r.json.error?.code).toBe("conflict");
+      expect(await rowsFor(c1)).toHaveLength(1);
+    });
+
+    it("refuses targets that make no sense: an owner (400), a deactivated person, a deleted client and made-up ids (404)", async () => {
+      expect((await grant(ownerA, { clientId: c3, userId: ownerA2.userId })).status).toBe(400);
+      const gone = await h.seedUser(orgA, "gone-user", "associate");
+      deactivatedFixtureId = gone.userId;
+      await h.owner.update(schema.users).set({ deletedAt: new Date() }).where(eq(schema.users.id, gone.userId));
+      expect((await grant(ownerA, { clientId: c3, userId: gone.userId })).status).toBe(404);
+      expect((await grant(ownerA, { clientId: cGone, userId: assocA.userId })).status).toBe(404);
+      expect((await grant(ownerA, { clientId: MISSING, userId: assocA.userId })).status).toBe(404);
+      expect((await grant(ownerA, { clientId: c3, userId: MISSING })).status).toBe(404);
+      expect(await rowsFor(c3)).toHaveLength(0);
+      expect(await rowsFor(cGone)).toHaveLength(0);
+    });
+
+    it("malformed requests are 400 and create nothing", async () => {
+      for (const [label, body, rawBody] of [
+        ["a bad client id", { clientId: "nope", userId: assocA.userId }, undefined],
+        ["a bad user id", { clientId: c3, userId: "1; drop table users" }, undefined],
+        ["a missing field", { clientId: c3 }, undefined],
+        ["an extra field", { clientId: c3, userId: assocA.userId, organizationId: orgB }, undefined],
+        ["a field that would name who assigned it", { clientId: c3, userId: assocA.userId, assignedByUserId: assocA.userId }, undefined],
+        ["an array", [c3, assocA.userId], undefined],
+        ["not JSON", undefined, "clientId=x"],
+        ["a huge body", undefined, JSON.stringify({ clientId: c3, userId: assocA.userId, pad: "x".repeat(5000) })],
+      ] as const) {
+        expect((await grant(ownerA, body, { rawBody })).status, label).toBe(400);
+      }
+      expect(await rowsFor(c3)).toHaveLength(0);
+      for (const id of ["not-a-uuid", "1;drop", "..%2F"]) expect((await end(ownerA, id)).status, id).toBe(400);
+    });
+
+    it("a cross-site or missing Origin is 403 even for the owner, on create and on end", async () => {
+      for (const origin of ["https://evil.example", "null", null]) {
+        const r = await grant(ownerA, { clientId: c3, userId: assocA.userId }, { origin });
+        expect(r.status, String(origin)).toBe(403);
+        expect(r.json.error?.code).toBe("forbidden_origin");
+      }
+      const del = await h.call(ownerA, assignmentRoute.DELETE, { method: "DELETE", path: `/api/admin/assignments/${grantC1Admin}`, params: { id: grantC1Admin }, origin: "https://evil.example" });
+      expect(del.status).toBe(403);
+      expect(await rowsFor(c3)).toHaveLength(0);
+      expect(clientIds(await clientList(adminA))).toEqual([c1]);
+    });
+
+    it("the owner lists assignments (ids only), filtered by client or person; bad filters are 400", async () => {
+      const all = await listA(ownerA);
+      expect(all.status).toBe(200);
+      const ids = (all.json.data as { id: string }[]).map((a) => a.id);
+      expect(ids).toContain(grantC1Admin);
+      expect(all.text).not.toContain("Synthetic");
+      const byClient = (await listA(ownerA, `?clientId=${c1}`)).json.data as { clientId: string; userId: string }[];
+      expect(byClient.every((a) => a.clientId === c1)).toBe(true);
+      expect(byClient.map((a) => a.userId)).toEqual([adminA.userId]);
+      const byUser = (await listA(ownerA, `?userId=${assocA.userId}`)).json.data as { userId: string }[];
+      expect(byUser.every((a) => a.userId === assocA.userId)).toBe(true);
+      for (const qs of ["?clientId=x", "?userId=1", "?limit=0", "?limit=101", "?offset=-1", "?foo=1", `?organizationId=${orgB}`]) expect((await listA(ownerA, qs)).status, qs).toBe(400);
+    });
+
+    it("ending a grant takes effect on the next request; ending twice is a 404; re-granting makes a new row", async () => {
+      const r = await end(ownerA, grantC1Admin);
+      expect(r.status).toBe(200);
+      expect(r.json).toEqual({ data: { id: grantC1Admin, ended: true } });
+      expect((await clientList(adminA)).json.data).toEqual([]);
+      expect((await clientOne(adminA, c1)).status).toBe(404);
+      expect((await end(ownerA, grantC1Admin)).status).toBe(404);
+      const ended = await auditRows(orgA, "assignment.ended");
+      expect(ended.filter((x) => x.resourceId === grantC1Admin)).toHaveLength(1);
+      // The row is kept, marked ended; an ended grant is not listed.
+      const [row] = await h.owner.select().from(schema.clientAssignments).where(eq(schema.clientAssignments.id, grantC1Admin));
+      expect(row.deletedAt).not.toBeNull();
+      expect(((await listA(ownerA)).json.data as { id: string }[]).map((a) => a.id)).not.toContain(grantC1Admin);
+
+      const again = await grant(ownerA, { clientId: c1, userId: adminA.userId });
+      expect(again.status).toBe(201);
+      expect((again.json.data as { id: string }).id).not.toBe(grantC1Admin);
+      expect(clientIds(await clientList(adminA))).toEqual([c1]);
+      grantC1Admin = (again.json.data as { id: string }).id;
+    });
+
+    it("a deleted client drops out of an existing grant", async () => {
+      const [extra] = [await addClient(orgA, "A-soon-gone")];
+      const g = await grant(ownerA, { clientId: extra, userId: adminA.userId });
+      expect(g.status).toBe(201);
+      expect(clientIds(await clientList(adminA))).toEqual([c1, extra].sort());
+      await h.owner.update(schema.clients).set({ deletedAt: new Date() }).where(eq(schema.clients.id, extra));
+      expect(clientIds(await clientList(adminA))).toEqual([c1]);
+      expect((await clientOne(adminA, extra)).status).toBe(404);
+    });
+
+    it("cross-tenant: nothing links across practices, in either direction, by id, body or header", async () => {
+      const missing = await grant(ownerA, { clientId: MISSING, userId: assocA.userId });
+      expect(missing.status).toBe(404);
+      // practice A's owner, practice B's client and/or person
+      for (const body of [{ clientId: b1, userId: assocA.userId }, { clientId: c1, userId: assocB.userId }, { clientId: b1, userId: assocB.userId }, { clientId: b2, userId: adminB.userId }]) {
+        const r = await grant(ownerA, body);
+        expect(r.status, JSON.stringify(Object.keys(body))).toBe(404);
+        expect(r.json).toEqual(missing.json);
+      }
+      expect(await rowsFor(b1)).toHaveLength(0);
+      expect(await rowsFor(b2)).toHaveLength(0);
+      expect((await h.owner.select().from(schema.clientAssignments).where(eq(schema.clientAssignments.userId, assocB.userId)))).toHaveLength(0);
+      // and the mirror image
+      for (const body of [{ clientId: c1, userId: assocB.userId }, { clientId: b1, userId: assocA.userId }, { clientId: c2, userId: adminB.userId }]) {
+        expect((await grant(ownerB, body)).status).toBe(404);
+      }
+      expect(await rowsFor(c2)).toHaveLength(1); // only the one practice A gave itself
+      // the organization cannot be moved by body or header
+      expect((await grant(ownerB, { clientId: b1, userId: assocB.userId, organizationId: orgA })).status).toBe(400);
+      const spoofed = await grant(ownerB, { clientId: c1, userId: assocB.userId }, { headers: { "x-organization-id": orgA, "x-org-id": orgA } });
+      expect(spoofed.status).toBe(404);
+
+      // practice B grants its own, ends it, and A can neither see nor end it
+      const mine = await grant(ownerB, { clientId: b1, userId: assocB.userId });
+      expect(mine.status).toBe(201);
+      const bId = (mine.json.data as { id: string }).id;
+      expect(clientIds(await clientList(assocB))).toEqual([b1]);
+      expect((await end(ownerA, bId)).status).toBe(404);
+      expect((await end(ownerA, bId)).json).toEqual(missing.json);
+      const [still] = await h.owner.select().from(schema.clientAssignments).where(eq(schema.clientAssignments.id, bId));
+      expect(still.deletedAt).toBeNull();
+      expect(((await listA(ownerA)).json.data as { id: string }[]).map((a) => a.id)).not.toContain(bId);
+      expect(((await listA(ownerB)).json.data as { id: string }[]).map((a) => a.id)).toEqual([bId]);
+      expect((await listA(ownerA, `?clientId=${b1}`)).json.data).toEqual([]);
+      expect((await listA(ownerA, `?userId=${assocB.userId}`)).json.data).toEqual([]);
+      expect(clientIds(await clientList(assocB))).toEqual([b1]);
+      // B's admin has no grant, so sees nothing, and A's grants do not reach B
+      expect((await clientList(adminB)).json.data).toEqual([]);
+      expect((await end(ownerB, grantC1Admin)).status).toBe(404);
+      expect(clientIds(await clientList(adminA))).toEqual([c1]);
+    });
+  });
+
+  // ---------------------------------------------------------------------------------------
   describe("user management (owner and admin)", () => {
     type Who = Pick<Person, "label" | "orgId"> & { cookie?: string };
     const list = (who: Who, qs = "") => h.call(who, usersRoute.GET, { path: `/api/admin/users${qs}` });
@@ -238,14 +470,15 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
     });
 
     it("the owner and the admin list exactly their own practice, deactivated people included, with allow-listed fields only", async () => {
-      const expected = [ownerA, adminA, assocA, subject1, subject2, ownerA2].map((p) => p.userId).sort();
+      const expected = [...[ownerA, adminA, assocA, subject1, subject2, ownerA2].map((p) => p.userId), deactivatedFixtureId].sort();
       for (const who of [ownerA, adminA]) {
         const r = await list(who);
         expect(r.status, who.label).toBe(200);
         expect(ids(r)).toEqual(expected);
         for (const u of r.json.data as Record<string, unknown>[]) {
           expect(Object.keys(u).sort()).toEqual(["active", "createdAt", "displayName", "email", "id", "mfaEnabled", "role"]);
-          expect(u.mfaEnabled).toBe(true);
+          expect(u.mfaEnabled).toBe(u.id !== deactivatedFixtureId); // everyone signed in with a code, except the fixture that never did
+          expect(u.active).toBe(u.id !== deactivatedFixtureId);
         }
         expect(r.headers.get("cache-control")).toBe("private, no-store");
       }
