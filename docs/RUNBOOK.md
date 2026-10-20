@@ -92,7 +92,7 @@ Who sees which client is decided inside the query (`lib/db/client-access.ts`): t
 
 ## CI integration tests (the `integration` job)
 
-The three database suites (`lib/db/integration.test.ts`, `lib/auth/auth.integration.test.ts`, `lib/auth/authz.integration.test.ts`) run in CI as the `integration` job in `.github/workflows/ci.yml`, against a **CI-only Neon project** (synthetic data only). It is separate from the required `checks` job, which holds no secrets. The job is advisory until it has been green on a few PRs.
+The four database suites (`lib/db/integration.test.ts`, `lib/auth/auth.integration.test.ts`, `lib/auth/authz.integration.test.ts`, `lib/auth/admin.integration.test.ts`) run in CI as the `integration` job in `.github/workflows/ci.yml`, against a **CI-only Neon project** (synthetic data only). It is separate from the required `checks` job, which holds no secrets. The job is advisory until it has been green on a few PRs.
 
 - **Why a separate project:** Neon logins belong to the whole project, so the owner login on the `test` branch is the same login as on `dev`. A GitHub secret holding it would be the `dev` owner credential. The CI project has its own owner password and holds nothing else. Never put a `dev` or `test` branch URL into a GitHub secret.
 - **The secret:** one repository secret, `CI_DATABASE_URL`, the CI project's direct (unpooled) owner connection string. The job applies migrations with it, then the suites use it to create their own login roles with a random per-run password (generated in the job and masked; there is nothing else to store).
