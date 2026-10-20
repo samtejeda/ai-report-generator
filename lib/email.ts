@@ -48,6 +48,14 @@ export const mailTemplates = {
       text: "The password for your account was just changed, and all other sessions were signed out.\n\nIf this was not you, contact your practice owner right away.",
     };
   },
+  /** Sent to a person whose authenticator the practice owner just reset. No link, no name. */
+  mfaReset(to: string): Mail {
+    return {
+      to,
+      subject: "Your two-step sign-in was reset",
+      text: "Your practice owner reset the two-step sign-in on your account, and you were signed out everywhere.\n\nThe next time you sign in with your password you will be asked to set up an authenticator app again.\n\nIf you did not expect this, contact your practice owner right away.",
+    };
+  },
   /** Sent when an authenticator is first set up. A thief who knew only the password and set up their own would otherwise be silent. */
   mfaEnabled(to: string): Mail {
     return {

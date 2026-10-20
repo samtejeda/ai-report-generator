@@ -52,6 +52,17 @@ async function expectPgError(p: PromiseLike<unknown>, code: string) {
   expect(pgCode(err), String((err as Error)?.message)).toBe(code);
 }
 
+async function expectPgErrorLabelled(label: string, p: PromiseLike<unknown>, code: string) {
+  let err: unknown;
+  try {
+    await p;
+  } catch (e) {
+    err = e;
+  }
+  expect(err, `${label}: expected the statement to fail`).toBeDefined();
+  expect(pgCode(err), `${label}: ${String((err as Error)?.message)}`).toBe(code);
+}
+
 type Db = NeonDatabase<typeof schema> & { $client: Pool };
 const BASE = "http://localhost:3000";
 const SECRET = "test-secret-".padEnd(48, "x");
@@ -982,6 +993,97 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
 
       it("an unknown address resets nothing", async () => {
         expect(await reset(emailFor("nobody"), true)).toEqual({ status: "not_found" });
+      });
+    });
+
+    describe("owner reset function (migration 0012)", () => {
+      const NO_DATA_FOUND = "P0002";
+      const NOT_IN_STATE = "55000";
+      const reset = (actor: string, target: string) => authDb.execute(sql`select reset_user_mfa(${actor}::uuid, ${target}::uuid)`);
+      async function practice(label: string) {
+        const target = await enrolled(label, { role: "associate" });
+        const actor = await seedUser(target.orgId, `${label}-owner`, { role: "owner" });
+        return { target, actor };
+      }
+      const enrollmentRows = async (userId: string) => (await owner.select().from(schema.authTwoFactors).where(eq(schema.authTwoFactors.userId, userId))).length;
+      const mfaFlag = async (userId: string) => (await owner.select().from(schema.users).where(eq(schema.users.id, userId)))[0].twoFactorEnabled;
+
+      it("an active owner resets a colleague in the same practice: enrollment, sessions and trusted devices go, the audit row is written, nobody else is touched", async () => {
+        const { target, actor } = await practice("fn-ok");
+        const bystander = await enrolled("fn-bystander");
+        const c = await challenge(target.email);
+        const trusted = await verifyCode(c.cookie, totpCode(target.secret), { trustDevice: true });
+        expect(named(trusted, "trust_device")).toBeDefined();
+        await signIn(actor.email); // the actor has a session of their own
+
+        await reset(actor.userId, target.userId);
+
+        expect(await enrollmentRows(target.userId)).toBe(0);
+        expect(await mfaFlag(target.userId)).toBe(false);
+        expect(await sessionCount(target.userId)).toBe(0);
+        expect(await strictSession(target.cookie)).toBeNull();
+        const devices = await owner.select().from(schema.authVerifications).where(eq(schema.authVerifications.value, target.userId));
+        expect(devices).toHaveLength(0);
+        // Their password is untouched, so the next sign-in is gated and sends them to set up a new phone.
+        const [account] = await owner.select().from(schema.authAccounts).where(eq(schema.authAccounts.userId, target.userId));
+        expect(account.password).toBeTruthy();
+        const again = await call("/sign-in/email", { body: { email: target.email, password: GOOD_PASSWORD }, cookie: named(trusted, "trust_device") });
+        expect(await strictSession(cookieFrom(again))).toBeNull();
+        expect(await session(cookieFrom(again))).not.toBeNull();
+
+        const rows = await auditRows(target.orgId, "auth.mfa_reset");
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({ actorUserId: actor.userId, resourceType: "users", resourceId: target.userId, outcome: "success", metadata: { method: "owner_reset" } });
+        // Not touched: the actor's session, another practice's enrollment, flag and sessions.
+        expect(await sessionCount(actor.userId)).toBeGreaterThan(0);
+        expect(await enrollmentRows(bystander.userId)).toBe(1);
+        expect(await mfaFlag(bystander.userId)).toBe(true);
+        expect(await strictSession(bystander.cookie)).not.toBeNull();
+      });
+
+      it("refuses everything but the exact case, each time leaving the target and the audit log untouched", async () => {
+        const { target, actor } = await practice("fn-refuse");
+        const stranger = await practice("fn-refuse-b"); // another practice, with its own owner
+        const associateActor = await seedUser(target.orgId, "fn-assoc", { role: "associate" });
+        const adminActor = await seedUser(target.orgId, "fn-admin", { role: "admin" });
+        const goneOwner = await seedUser(target.orgId, "fn-gone-owner", { role: "owner", deleted: true });
+        const otherOwner = await seedUser(target.orgId, "fn-other-owner", { role: "owner" });
+        const goneTarget = await enrolled("fn-gone-target", { role: "associate" });
+        await owner.update(schema.users).set({ deletedAt: new Date() }).where(eq(schema.users.id, goneTarget.userId));
+        const goneActor = await seedUser(goneTarget.orgId, "fn-gone-target-owner", { role: "owner" });
+
+        const cases: [string, string, string, string][] = [
+          ["an associate as actor", associateActor.userId, target.userId, INSUFFICIENT_PRIVILEGE],
+          ["an admin as actor", adminActor.userId, target.userId, INSUFFICIENT_PRIVILEGE],
+          ["a deactivated owner as actor", goneOwner.userId, target.userId, INSUFFICIENT_PRIVILEGE],
+          ["an actor that does not exist", crypto.randomUUID(), target.userId, INSUFFICIENT_PRIVILEGE],
+          ["an owner resetting themselves", actor.userId, actor.userId, INSUFFICIENT_PRIVILEGE],
+          ["an owner resetting another owner", actor.userId, otherOwner.userId, INSUFFICIENT_PRIVILEGE],
+          ["another practice's owner as actor (target not found there)", stranger.actor.userId, target.userId, NO_DATA_FOUND],
+          ["a target that does not exist", actor.userId, crypto.randomUUID(), NO_DATA_FOUND],
+          ["a deactivated target", goneActor.userId, goneTarget.userId, NOT_IN_STATE],
+        ];
+        for (const [label, a, t, code] of cases) await expectPgErrorLabelled(label, reset(a, t), code);
+
+        expect(await enrollmentRows(target.userId)).toBe(1);
+        expect(await mfaFlag(target.userId)).toBe(true);
+        expect(await strictSession(target.cookie)).not.toBeNull();
+        expect(await enrollmentRows(goneTarget.userId)).toBe(1);
+        expect(await enrollmentRows(stranger.target.userId)).toBe(1);
+        expect(await auditRows(target.orgId, "auth.mfa_reset")).toHaveLength(0);
+        expect(await auditRows(goneTarget.orgId, "auth.mfa_reset")).toHaveLength(0);
+      });
+
+      it("only auth_runtime may call it: not the app role, not the table owner's group, not PUBLIC", async () => {
+        const { target, actor } = await practice("fn-rights");
+        await expectPgError(appPool.query("select reset_user_mfa($1::uuid, $2::uuid)", [actor.userId, target.userId]), INSUFFICIENT_PRIVILEGE);
+        const r = await owner.execute(sql`
+          select has_function_privilege('auth_runtime', 'reset_user_mfa(uuid,uuid)', 'EXECUTE') as auth,
+                 has_function_privilege('app_runtime', 'reset_user_mfa(uuid,uuid)', 'EXECUTE') as app,
+                 exists (select 1 from pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                         where p.proname = 'reset_user_mfa' and a.grantee = 0) as public_can`);
+        expect(r.rows[0]).toEqual({ auth: true, app: false, public_can: false });
+        expect(await enrollmentRows(target.userId)).toBe(1);
       });
     });
   });

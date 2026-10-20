@@ -56,3 +56,19 @@ describe("owner: anything else in the practice", () => {
     for (const target of ROLES) for (const c of CHANGES) expect(checkUserChange(owner, { id: OTHER, role: target }, c), `${target} ${label(c)}`).toBe("ok");
   });
 });
+
+describe("resetting an authenticator", () => {
+  const reset: UserChange = { kind: "reset_mfa" };
+  it("is the owner's alone: an associate and an admin are refused for every target", () => {
+    for (const actorRole of ["associate", "admin"] as const) {
+      for (const target of ROLES) expect(checkUserChange({ userId: ME, role: actorRole }, { id: OTHER, role: target }, reset), `${actorRole} → ${target}`).toBe("not_allowed");
+    }
+  });
+  it("an owner may reset an associate or an admin", () => {
+    for (const target of ["associate", "admin"] as const) expect(checkUserChange({ userId: ME, role: "owner" }, { id: OTHER, role: target }, reset)).toBe("ok");
+  });
+  it("never oneself, and never another owner (that is the break-glass script)", () => {
+    expect(checkUserChange({ userId: ME, role: "owner" }, { id: ME, role: "owner" }, reset)).toBe("self");
+    expect(checkUserChange({ userId: ME, role: "owner" }, { id: OTHER, role: "owner" }, reset)).toBe("owner_break_glass");
+  });
+});

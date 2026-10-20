@@ -85,6 +85,13 @@
       "when": 1792518528644,
       "tag": "0011_users_keep_an_owner",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792520709848,
+      "tag": "0012_reset_user_mfa",
+      "breakpoints": true
     }
   ]
 }

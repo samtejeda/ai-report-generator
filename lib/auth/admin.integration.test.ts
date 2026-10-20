@@ -19,6 +19,7 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
   let deactivateRoute: { POST: Handler };
   let reactivateRoute: { POST: Handler };
   let meRoute: { GET: Handler };
+  let resetRoute: { POST: Handler };
   let assignmentsRoute: { GET: Handler; POST: Handler };
   let assignmentRoute: { DELETE: Handler };
   let clientsRoute: { GET: Handler };
@@ -28,6 +29,7 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
   let orgB: string;
   let ownerA: Person, adminA: Person, assocA: Person, subject1: Person, subject2: Person, ownerA2: Person;
   let ownerB: Person, adminB: Person, assocB: Person;
+  let resetA: Person, resetAdminA: Person, resetB: Person; // people whose authenticator is reset (a reset ends their sessions)
   let deactivatedFixtureId = ""; // a deactivated person the assignment tests add to practice A
 
   const GOOD = "https://studio-mac.tail1234.ts.net/v1";
@@ -51,6 +53,7 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
     deactivateRoute = (await import("@/app/api/admin/users/[id]/deactivate/route")) as unknown as { POST: Handler };
     reactivateRoute = (await import("@/app/api/admin/users/[id]/reactivate/route")) as unknown as { POST: Handler };
     meRoute = (await import("@/app/api/me/route")) as unknown as { GET: Handler };
+    resetRoute = (await import("@/app/api/admin/users/[id]/reset-mfa/route")) as unknown as { POST: Handler };
     assignmentsRoute = (await import("@/app/api/admin/assignments/route")) as unknown as { GET: Handler; POST: Handler };
     assignmentRoute = (await import("@/app/api/admin/assignments/[id]/route")) as unknown as { DELETE: Handler };
     clientsRoute = (await import("@/app/api/clients/route")) as unknown as { GET: Handler };
@@ -58,7 +61,7 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
 
     orgA = await h.seedOrg("admin-A");
     orgB = await h.seedOrg("admin-B");
-    [ownerA, adminA, assocA, subject1, subject2, ownerA2, ownerB, adminB, assocB] = await Promise.all([
+    [ownerA, adminA, assocA, subject1, subject2, ownerA2, ownerB, adminB, assocB, resetA, resetAdminA, resetB] = await Promise.all([
       h.makePerson(orgA, "owner-a", "owner"),
       h.makePerson(orgA, "admin-a", "admin"),
       h.makePerson(orgA, "assoc-a", "associate"),
@@ -68,6 +71,9 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
       h.makePerson(orgB, "owner-b", "owner"),
       h.makePerson(orgB, "admin-b", "admin"),
       h.makePerson(orgB, "assoc-b", "associate"),
+      h.makePerson(orgA, "reset-a", "associate"),
+      h.makePerson(orgA, "reset-admin-a", "admin"),
+      h.makePerson(orgB, "reset-b", "associate"),
     ]);
   }, 300_000);
 
@@ -440,6 +446,132 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
   });
 
   // ---------------------------------------------------------------------------------------
+  describe("owner MFA reset (fresh sign-in, owner only)", () => {
+    type Who = Pick<Person, "label" | "orgId"> & { cookie?: string };
+    const reset = (who: Who, id: string, o: { origin?: string | null } = {}) =>
+      h.call(who, resetRoute.POST, { method: "POST", path: `/api/admin/users/${id}/reset-mfa`, params: { id }, ...o });
+    const me = (who: Who) => h.call(who, meRoute.GET, { path: "/api/me" });
+    const enrollments = async (userId: string) => (await h.owner.select().from(schema.authTwoFactors).where(eq(schema.authTwoFactors.userId, userId))).length;
+    const flag = async (userId: string) => (await h.owner.select().from(schema.users).where(eq(schema.users.id, userId)))[0].twoFactorEnabled;
+    const resetRows = (orgId: string) => auditRows(orgId, "auth.mfa_reset");
+    const MISSING = "00000000-0000-4000-8000-00000000c0de";
+
+    it("no session is 401; an associate and an admin are 403 and audited; nothing is reset", async () => {
+      expect((await reset({ label: "nobody", orgId: "none" }, resetA.userId)).status).toBe(401);
+      const roleDenials = async (p: Person) =>
+        (await auditRows(orgA, "authz.denied")).filter((d) => d.actorUserId === p.userId && d.resourceType === "user" && (d.metadata as { reason?: string }).reason === "role_not_allowed").length;
+      for (const who of [assocA, adminA]) {
+        const before = await roleDenials(who);
+        const r = await reset(who, resetA.userId);
+        expect(r.status, who.label).toBe(403);
+        expect(r.json.error?.code).toBe("forbidden");
+        // Refused by the route's own role list (not merely by the later rule): the guard audited it.
+        expect(await roleDenials(who), `${who.label} audited by the guard`).toBe(before + 1);
+      }
+      expect(await enrollments(resetA.userId)).toBe(1);
+      expect(await flag(resetA.userId)).toBe(true);
+      expect((await me(resetA)).status).toBe(200);
+      expect(await resetRows(orgA)).toHaveLength(0);
+    });
+
+    it("a stale sign-in is 403 reauth_required and nothing is reset; a cross-site or missing Origin is 403", async () => {
+      await h.signedInAgo(ownerA, 10 * 60);
+      const stale = await reset(ownerA, resetA.userId);
+      expect(stale.status).toBe(403);
+      expect(stale.json.error?.code).toBe("reauth_required");
+      await h.signedInAgo(ownerA, 5);
+      for (const origin of ["https://evil.example", "null", null]) {
+        const r = await reset(ownerA, resetA.userId, { origin });
+        expect(r.status, String(origin)).toBe(403);
+        expect(r.json.error?.code).toBe("forbidden_origin");
+      }
+      expect(await enrollments(resetA.userId)).toBe(1);
+      expect((await me(resetA)).status).toBe(200);
+    });
+
+    it("malformed ids are 400", async () => {
+      await h.signedInAgo(ownerA, 5);
+      for (const id of ["nope", "1; drop table users", "..%2F"]) expect((await reset(ownerA, id)).status, id).toBe(400);
+    });
+
+    it("refuses oneself and another owner (the break-glass script is for those), audited with a fixed reason", async () => {
+      await h.signedInAgo(ownerA, 5);
+      const before = (await auditRows(orgA, "authz.denied")).length;
+      expect((await reset(ownerA, ownerA.userId)).status).toBe(403);
+      expect((await reset(ownerA, ownerA2.userId)).status).toBe(403);
+      expect(await enrollments(ownerA.userId)).toBe(1);
+      expect(await enrollments(ownerA2.userId)).toBe(1);
+      expect((await me(ownerA2)).status).toBe(200);
+      const reasons = (await auditRows(orgA, "authz.denied")).slice(before).map((d) => (d.metadata as { reason?: string }).reason).sort();
+      expect(reasons).toEqual(["owner_break_glass", "self_change"]);
+    });
+
+    it("cross-tenant: another practice's person is the same 404 as a made-up id, and nothing is reset", async () => {
+      await h.signedInAgo(ownerA, 5);
+      await h.signedInAgo(ownerB, 5);
+      const missing = await reset(ownerA, MISSING);
+      expect(missing.status).toBe(404);
+      for (const target of [resetB, assocB, adminB, ownerB]) {
+        const r = await reset(ownerA, target.userId);
+        expect(r.status, target.label).toBe(404);
+        expect(r.json).toEqual(missing.json);
+      }
+      for (const target of [resetA, subject1, ownerA, adminA]) expect((await reset(ownerB, target.userId)).status, target.label).toBe(404);
+      for (const p of [resetA, subject1, resetB, assocB]) {
+        expect(await enrollments(p.userId), p.label).toBe(1);
+        expect(await flag(p.userId), p.label).toBe(true);
+      }
+      expect((await me(resetB)).status).toBe(200);
+      expect((await me(resetA)).status).toBe(200);
+      expect(await resetRows(orgA)).toHaveLength(0);
+      expect(await resetRows(orgB)).toHaveLength(0);
+    });
+
+    it("the owner resets an associate: enrollment gone, flag off, signed out everywhere, audited by the database function, the person told by email, password kept", async () => {
+      await h.signedInAgo(ownerA, 5);
+      const info = vi.mocked(console.info);
+      info.mockClear();
+      expect((await me(resetA)).status).toBe(200);
+      const r = await reset(ownerA, resetA.userId);
+      expect(r.status).toBe(200);
+      expect(r.json.data).toMatchObject({ id: resetA.userId, role: "associate", active: true, mfaEnabled: false });
+      expect(r.headers.get("cache-control")).toBe("private, no-store");
+
+      expect(await enrollments(resetA.userId)).toBe(0);
+      expect(await flag(resetA.userId)).toBe(false);
+      expect((await me(resetA)).status).toBe(401); // the same cookie is dead
+      expect(await h.owner.select().from(schema.authSessions).where(eq(schema.authSessions.userId, resetA.userId))).toHaveLength(0);
+
+      const rows = await resetRows(orgA);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ actorUserId: ownerA.userId, resourceType: "users", resourceId: resetA.userId, outcome: "success", metadata: { method: "owner_reset" } });
+      expect(JSON.stringify(rows[0])).not.toMatch(/example\.test|Synthetic|@/);
+
+      await vi.waitFor(() => {
+        const sent = info.mock.calls.map((c) => String(c[0])).filter((line) => line.includes(`to=${resetA.email}`));
+        expect(sent.length).toBe(1);
+        expect(sent[0]).toContain("Your two-step sign-in was reset");
+      });
+
+      // Their password still works, but a password alone gets no session until a new phone is set up.
+      const again = await h.authCall("/sign-in/email", { body: { email: resetA.email, password: "correct horse battery staple 1" } });
+      expect(again.status).toBe(200);
+      expect(((await again.json()) as { twoFactorRedirect?: boolean }).twoFactorRedirect).toBeUndefined();
+      expect((await me({ label: "reset-a-new", orgId: orgA, cookie: h.cookieFrom(again) })).status).toBe(401);
+    });
+
+    it("the owner resets an admin too, and nobody else's authenticator changes", async () => {
+      await h.signedInAgo(ownerA, 5);
+      const r = await reset(ownerA, resetAdminA.userId);
+      expect(r.status).toBe(200);
+      expect(r.json.data).toMatchObject({ id: resetAdminA.userId, role: "admin", mfaEnabled: false });
+      expect((await me(resetAdminA)).status).toBe(401);
+      for (const p of [ownerA, ownerA2, adminA, assocA, subject1]) expect(await enrollments(p.userId), p.label).toBe(1);
+      expect((await resetRows(orgA)).map((x) => x.resourceId).sort()).toEqual([resetA.userId, resetAdminA.userId].sort());
+    });
+  });
+
+  // ---------------------------------------------------------------------------------------
   describe("user management (owner and admin)", () => {
     type Who = Pick<Person, "label" | "orgId"> & { cookie?: string };
     const list = (who: Who, qs = "") => h.call(who, usersRoute.GET, { path: `/api/admin/users${qs}` });
@@ -456,6 +588,7 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
 
     it("no session is 401; an associate is 403 and audited; both without any user data", async () => {
       const nobody = { label: "nobody", orgId: "none" };
+      const deniedBefore = (await auditRows(orgA, "authz.denied")).filter((x) => x.resourceType === "user" && x.actorUserId === assocA.userId).length;
       expect((await list(nobody)).status).toBe(401);
       expect((await patch(nobody, subject1.userId, { role: "admin" })).status).toBe(401);
       expect((await deactivate(nobody, subject1.userId)).status).toBe(401);
@@ -466,25 +599,26 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
       }
       expect((await dbUser(subject1.userId)).role).toBe("associate");
       const denied = (await auditRows(orgA, "authz.denied")).filter((x) => x.resourceType === "user" && x.actorUserId === assocA.userId);
-      expect(denied).toHaveLength(4);
+      expect(denied.length - deniedBefore).toBe(4);
     });
 
     it("the owner and the admin list exactly their own practice, deactivated people included, with allow-listed fields only", async () => {
-      const expected = [...[ownerA, adminA, assocA, subject1, subject2, ownerA2].map((p) => p.userId), deactivatedFixtureId].sort();
+      const expected = [...[ownerA, adminA, assocA, subject1, subject2, ownerA2, resetA, resetAdminA].map((p) => p.userId), deactivatedFixtureId].sort();
       for (const who of [ownerA, adminA]) {
         const r = await list(who);
         expect(r.status, who.label).toBe(200);
         expect(ids(r)).toEqual(expected);
         for (const u of r.json.data as Record<string, unknown>[]) {
           expect(Object.keys(u).sort()).toEqual(["active", "createdAt", "displayName", "email", "id", "mfaEnabled", "role"]);
-          expect(u.mfaEnabled).toBe(u.id !== deactivatedFixtureId); // everyone signed in with a code, except the fixture that never did
+          const resetAlready = [resetA.userId, resetAdminA.userId].includes(u.id as string); // their authenticator was reset above
+          expect(u.mfaEnabled).toBe(u.id !== deactivatedFixtureId && !resetAlready); // everyone signed in with a code, except the fixture that never did
           expect(u.active).toBe(u.id !== deactivatedFixtureId);
         }
         expect(r.headers.get("cache-control")).toBe("private, no-store");
       }
       const b = await list(ownerB);
-      expect(ids(b)).toEqual([ownerB, adminB, assocB].map((p) => p.userId).sort());
-      for (const p of [ownerA, adminA, assocA, subject1, subject2, ownerA2]) expect(b.text).not.toContain(p.userId);
+      expect(ids(b)).toEqual([ownerB, adminB, assocB, resetB].map((p) => p.userId).sort());
+      for (const p of [ownerA, adminA, assocA, subject1, subject2, ownerA2, resetA, resetAdminA]) expect(b.text).not.toContain(p.userId);
     });
 
     it("paging is capped and strict: bad values are 400, unknown parameters are 400, a practice cannot be named", async () => {
