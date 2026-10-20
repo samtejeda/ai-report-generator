@@ -5,6 +5,7 @@ export * from "./organizations";
 export * from "./users";
 export * from "./clients";
 export * from "./client-history";
+export * from "./client-assignments";
 export * from "./templates";
 export * from "./reports";
 export * from "./rag";

@@ -152,6 +152,7 @@ All domain tables include `organization_id`, `created_at`, `updated_at`, and `de
 - **users** — practice owner / associate / admin roles. Belong to one organization. Email is globally unique, lowercase, and `email_verified` is set only by the auth layer. No credential here: the scrypt hash lives in `auth_accounts`.
 - **auth_accounts / auth_sessions / auth_verifications / auth_rate_limits / auth_two_factors** — Better Auth's tables (password hashes, session tokens, hashed reset tokens and trusted-device records, rate-limit counters, encrypted authenticator secrets and backup codes). No `organization_id`, no RLS: they are reachable only by the `auth_runtime` database role, never by `app_runtime` (migrations 0006, 0008). `users.two_factor_enabled` is writable by `auth_runtime` only. Session `expires_at` is the idle deadline; the absolute cap is enforced from `created_at` in `requireSession()`.
 - **clients** — the children/clients being evaluated. `external_id` optional (if the practice has their own ID system). Minimum PII required.
+- **client_assignments** — which associate may see which client (client, user, assigned-by; ids only, no PHI). Composite FKs keep it inside one organization; ending an assignment is a soft delete; a client purge removes the rows. The owner sees every client in the practice and needs no row; an admin gets no clinical access from it. The rule that uses it lives in `lib/db/client-access.ts`.
 - **client_history** — longitudinal threads per client: prior evaluations, re-eval cadence (IDEA requires 3-year re-evals), notes between sessions.
 - **report_templates** — section structure as `jsonb`. `active_methodology_prompt_id` points at the one active prompt version (composite FK keeps it within the same template and org). v1 scope: psychoeducational evaluation template.
 - **methodology_prompts** — *immutable*, versioned. New version = new row; never updated or deleted (DB triggers + grants). Activating a version moves the template's `active_methodology_prompt_id` pointer, so exactly one is active per template. Tracks `created_by` and change `notes`.
@@ -238,6 +239,8 @@ Roles (on `users`): **owner** (practice owner, full access in their organization
 2. Layout-level check: server layout resolves the session and organization; renders nothing for the wrong role.
 3. Every page, server action, and route handler re-checks session, role, and organization itself.
 4. Data functions enforce ownership inside the query: every query on a multi-tenant table filters by `organization_id` (query-level guard), and by client/report assignment where roles require it.
+
+In code: `proxy.ts` (layer 1, session-cookie presence only) and the one list of public pages and endpoints in `lib/auth/public-surface.ts`; `requireSession()` / `requireRole()` for pages, layouts and server actions and `guardedRoute()` for route handlers (`lib/auth/guard.ts`: own origin on state-changing methods, then session, then role from the database, errors reduced to a fixed 500); the client visibility rule in `lib/db/client-access.ts`. `lib/auth/guard-coverage.test.ts` fails CI when a route, page or `"use server"` file has no guard and is not on the public list.
 
 ## API security rules
 

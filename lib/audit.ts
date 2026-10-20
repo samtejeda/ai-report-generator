@@ -33,6 +33,10 @@ export const AUDIT_ACTIONS = [
   "auth.mfa_backup_codes_regenerated",
   "auth.mfa_device_trusted",
   "auth.mfa_reset",
+  // Authorization (feat/auth-authz). Ids and the caller's role only, never a client's name.
+  "authz.denied",
+  "client.listed",
+  "client.viewed",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 

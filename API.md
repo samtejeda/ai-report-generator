@@ -31,10 +31,15 @@ Inventory of every endpoint and server action. Updated in the same commit as any
 | POST | `/api/auth/two-factor/verify-totp` | Session (enrollment) or the signed code-step cookie (sign-in) | Enrollment: the first valid code turns MFA on. Sign-in: a valid code completes login; `trustDevice: true` also marks the device trusted for 14 days. 5 wrong codes end the challenge; 5 consecutive wrong codes lock the account's code step for 15 min. | `auth.mfa_enrolled`, `auth.login`, `auth.mfa_device_trusted`, `auth.mfa_failed` | 10 per 15 min per client address |
 | POST | `/api/auth/two-factor/verify-backup-code` | The signed code-step cookie (sign-in) | A valid unused backup code completes login and is spent. | `auth.login`, `auth.mfa_backup_code_used`, `auth.mfa_device_trusted`, `auth.mfa_failed` | 10 per 15 min per client address |
 | POST | `/api/auth/two-factor/generate-backup-codes` | Session (MFA on) | Re-checks the password, replaces all backup codes, returns the new ones once. | `auth.mfa_backup_codes_regenerated` | 5 per 15 min per client address |
+| GET | `/api/me` | Session; owner, associate, admin | The caller's own id and role, as the server reads them now. Nothing about clients or other users; no organization id. | None | None yet |
+| GET | `/api/clients` | Session; owner (whole practice) or associate (assigned clients only). Admin: 403, audited. | Paginated clients the caller may see: `?limit` (1 to 100, default 50) and `?offset` (0 to 10 000); any other query parameter is a 400. Returns `{data:[{id, displayName, dateOfBirth, gradeLevel, externalId, createdAt}], limit, offset}`, newest first. | `client.listed` (role only); `authz.denied` for a refused role | None yet |
+| GET | `/api/clients/{id}` | Session; owner or associate. Admin: 403, audited. | One client the caller may see. A malformed id is 400. A client in another practice, one an associate is not assigned to, and one that does not exist are all the same 404. Returns `{data:{...}}` with the same fields as the list. | `client.viewed` (client id, role); `authz.denied` for a refused role | None yet |
 
 Only the twelve `/api/auth/*` endpoints above are reachable; the route (`app/api/auth/[...all]/route.ts`) answers 404 for every other Better Auth path (sign-up, get-session, list-sessions, update-user, social login, ...). The list lives in `lib/auth/route-policy.ts` and a test keeps it equal to this table. POSTs are also checked for origin (CSRF) and redirect targets.
 
 ## Pages
+
+Everything except the public pages needs a session. `proxy.ts` sends a request with no session cookie to `/login` (307) or answers an API call 401; it is a convenience, and every page and handler re-checks for itself. The public pages and endpoints are the one list in `lib/auth/public-surface.ts`.
 
 | Path | Auth | Purpose |
 |---|---|---|
@@ -42,7 +47,8 @@ Only the twelve `/api/auth/*` endpoints above are reachable; the route (`app/api
 | `/forgot-password` | Public | Requests a reset link; the same message whether or not the address has an account. |
 | `/reset-password` | Public (the emailed token is the credential) | Choose a new password; the token is removed from the address bar once read, and no Referer is sent. |
 | `/account/mfa` | Password session without MFA yet (`getEnrollingSessionOrNull()`); already-enrolled users are sent to `/account` | Three steps: confirm password, add the setup key to an authenticator app and type the first code, save the backup codes (shown once). |
-| `/account` | Session (`requireSession()` inside the page) | Shows the signed-in role and a sign-out button. Proving ground for `requireSession()`. |
+| `/account` | Session (`(app)` layout and `requireSession()` inside the page) | Shows the signed-in role and a sign-out button. |
+| `/clients` | Session; owner or associate (`(app)/clients` layout and `requireRole()` inside the page). Admin: the 404 page, audited. | Plain list of the clients the caller may see (owner: the practice; associate: assigned only). Audit `client.listed`. |
 
 ## Server actions
 

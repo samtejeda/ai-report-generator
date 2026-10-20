@@ -1034,7 +1034,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
       expect(r.rows[0]).toMatchObject({ rolsuper: false, rolbypassrls: false, rolcreaterole: false, rolcreatedb: false, is_auth: true, is_app: false });
     });
 
-    it.each(["clients", "client_history", "reports", "report_sections", "report_versions", "report_templates", "methodology_prompts", "rag_documents", "rag_chunks", "rag_embeddings", "jobs", "organizations", "audit_log"])(
+    it.each(["clients", "client_assignments", "client_history", "reports", "report_sections", "report_versions", "report_templates", "methodology_prompts", "rag_documents", "rag_chunks", "rag_embeddings", "jobs", "organizations", "audit_log"])(
       "auth_runtime cannot read %s",
       async (table) => {
         await expectPgError(authDb.execute(sql.raw(`select 1 from ${table} limit 1`)), INSUFFICIENT_PRIVILEGE);

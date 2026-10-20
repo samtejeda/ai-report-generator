@@ -17,12 +17,13 @@ const api = readFileSync("API.md", "utf8");
 const routes = routeFiles("app").map((file) => ({
   file,
   // app/api/health/route.ts -> /api/health ; app/api/auth/[...all]/route.ts -> /api/auth
-  path: "/" + file.replace(/^app\//, "").replace(/\/route\.\w+$/, "").replace(/\/\[\.\.\.\w+\]$/, ""),
+  path: "/" + file.replace(/^app\//, "").replace(/\/route\.\w+$/, "").replace(/\/\[\.\.\.\w+\]$/, "")
+    .replace(/\[(\w+)\]/g, "{$1}"),
 }));
 
 describe("API inventory", () => {
   it("finds the known routes (guards against the scan silently finding nothing)", () => {
-    expect(routes.map((r) => r.path).sort()).toEqual(["/api/auth", "/api/health"]);
+    expect(routes.map((r) => r.path).sort()).toEqual(["/api/auth", "/api/clients", "/api/clients/{id}", "/api/health", "/api/me"]);
   });
 
   it.each(routes.map((r) => [r.file, r.path] as const))("%s is documented in API.md as %s", (_file, path) => {
