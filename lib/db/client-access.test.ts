@@ -11,7 +11,7 @@ const mock = drizzle.mock({ schema });
 const ORG = "11111111-1111-4111-8111-111111111111";
 const USER = "22222222-2222-4222-8222-222222222222";
 const ID = "33333333-3333-4333-8333-333333333333";
-const as = (role: SessionContext["role"]): SessionContext => ({ userId: USER, organizationId: ORG, role });
+const as = (role: SessionContext["role"]): SessionContext => ({ userId: USER, organizationId: ORG, role, signedInAt: new Date("2026-10-20T12:00:00Z") });
 
 describe("permission matrix", () => {
   it("owner and associate reach clinical content; admin does not (option A, 2026-10-19)", () => {

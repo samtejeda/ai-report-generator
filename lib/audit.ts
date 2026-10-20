@@ -37,6 +37,8 @@ export const AUDIT_ACTIONS = [
   "authz.denied",
   "client.listed",
   "client.viewed",
+  // Admin (feat/auth-admin). Ids and a role or a "set"/"cleared" word only; never the endpoint URL.
+  "org.inference_endpoint_set",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
