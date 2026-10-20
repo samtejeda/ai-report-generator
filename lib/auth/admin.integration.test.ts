@@ -812,6 +812,25 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
   });
 
   // ---------------------------------------------------------------------------------------
+  describe("no cross-origin access (audit 04 item 5)", () => {
+    it("none of the admin routes sends CORS headers, even to a cross-site Origin, and a cross-site write is refused", async () => {
+      const cross = { origin: "https://evil.example" };
+      const replies = [
+        await h.call(ownerA, usersRoute.GET, { path: "/api/admin/users", headers: cross }),
+        await h.call(ownerA, assignmentsRoute.GET, { path: "/api/admin/assignments", headers: cross }),
+        await h.call(ownerA, endpointRoute.GET, { path: "/api/admin/inference-endpoint", headers: cross }),
+        await h.call(adminA, usersRoute.GET, { path: "/api/admin/users", headers: cross }),
+        await h.call({ label: "nobody", orgId: "none" }, usersRoute.GET, { path: "/api/admin/users", headers: cross }),
+        await h.call(ownerA, endpointRoute.PUT, { method: "PUT", path: "/api/admin/inference-endpoint", body: { endpoint: null }, origin: "https://evil.example" }),
+      ];
+      for (const r of replies) {
+        for (const name of ["access-control-allow-origin", "access-control-allow-credentials", "access-control-allow-methods", "access-control-allow-headers"]) expect(r.headers.get(name), name).toBeNull();
+      }
+      expect(replies[5].status).toBe(403);
+    });
+  });
+
+  // ---------------------------------------------------------------------------------------
   describe("nothing leaks across practices (scan of every response any caller received)", () => {
     it("no response to a practice-B caller names a practice-A id, and vice versa", () => {
       for (const s of h.seen) {
