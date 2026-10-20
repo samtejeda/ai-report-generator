@@ -13,7 +13,8 @@ function make(session: SessionContext | null, overrides: Partial<GuardDeps> = {}
   return { guard, audit, resolve };
 }
 
-const as = (role: SessionContext["role"]): SessionContext => ({ userId: USER, organizationId: ORG, role });
+const NOW = new Date("2026-10-20T12:00:00.000Z");
+const as = (role: SessionContext["role"], signedInAt: Date = NOW): SessionContext => ({ userId: USER, organizationId: ORG, role, signedInAt });
 const get = (headers: Record<string, string> = {}) => new Request("https://app.example.test/api/x", { headers });
 const post = (headers: Record<string, string> = {}) => new Request("https://app.example.test/api/x", { method: "POST", headers });
 
@@ -41,7 +42,7 @@ describe("guardedRoute: identity", () => {
       },
     })(get({ "x-organization-id": "99999999-9999-4999-8999-999999999999", "x-role": "owner" }));
     expect(res.status).toBe(200);
-    expect(seen).toEqual({ userId: USER, organizationId: ORG, role: "associate" });
+    expect(seen).toEqual(as("associate"));
   });
 });
 
@@ -152,5 +153,70 @@ describe("guardedRoute: route parameters", () => {
       },
     })(get(), { params: Promise.resolve({ id: "abc" }) });
     expect(seen).toEqual({ id: "abc" });
+  });
+});
+
+describe("guardedRoute: fresh sign-in on sensitive routes", () => {
+  const at = (secondsAgo: number) => as("owner", new Date(NOW.getTime() - secondsAgo * 1000));
+  const sensitive = (handler = vi.fn(async () => Response.json({ done: true }))) => ({
+    options: { roles: ["owner"] as const, resource: "organization", fresh: true, handler },
+    handler,
+  });
+  const withClock = (session: SessionContext | null) => make(session, { now: () => NOW, freshSeconds: 300 });
+
+  it("lets a sign-in from a moment ago through", async () => {
+    const { guard } = withClock(at(10));
+    const { options, handler } = sensitive();
+    const res = await guard(options)(get());
+    expect(res.status).toBe(200);
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it("accepts exactly the limit and refuses one second past it", async () => {
+    const ok = withClock(at(300));
+    expect((await ok.guard(sensitive().options)(get())).status).toBe(200);
+    const stale = withClock(at(301));
+    const { options, handler } = sensitive();
+    const res = await stale.guard(options)(get());
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: { code: "reauth_required", message: "Sign in again to do this." } });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("refuses a sign-in dated in the future (a clock or data problem is not a fresh sign-in)", async () => {
+    const { guard } = withClock(at(-60));
+    const { options, handler } = sensitive();
+    expect((await guard(options)(get())).status).toBe(403);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("audits the refusal with the reason and the role only", async () => {
+    const { guard, audit } = withClock(at(4000));
+    await guard(sensitive().options)(get());
+    expect(audit).toHaveBeenCalledWith(
+      { organizationId: ORG, actorUserId: USER },
+      { action: "authz.denied", resourceType: "organization", outcome: "denied", metadata: { role: "owner", reason: "sign_in_not_recent" } },
+    );
+  });
+
+  it("checks the role first: a role that may not call the route is told 403 forbidden, not about freshness", async () => {
+    const { guard, audit } = withClock(as("admin", new Date(NOW.getTime() - 4000 * 1000)));
+    const res = await guard(sensitive().options)(get());
+    expect((await res.json()).error.code).toBe("forbidden");
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit.mock.calls[0]).toEqual([expect.anything(), expect.objectContaining({ metadata: { role: "admin", reason: "role_not_allowed" } })]);
+  });
+
+  it("a route that is not marked fresh ignores how old the sign-in is", async () => {
+    const { guard } = withClock(at(100_000));
+    const res = await guard({ roles: ["owner"], resource: "organization", handler: async () => Response.json({}) })(get());
+    expect(res.status).toBe(200);
+  });
+
+  it("the default limit is the 5 minutes in lib/auth/config.ts", async () => {
+    const { guard } = make(at(299), { now: () => NOW });
+    expect((await guard(sensitive().options)(get())).status).toBe(200);
+    const stale = make(at(301), { now: () => NOW });
+    expect((await stale.guard(sensitive().options)(get())).status).toBe(403);
   });
 });

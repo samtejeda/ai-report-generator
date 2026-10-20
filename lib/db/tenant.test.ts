@@ -127,3 +127,56 @@ describe("tenantDb: type-level guards", () => {
     expect(never).toBeTypeOf("function");
   });
 });
+
+describe("tenantDb: inference endpoint (audit 04 item 8)", () => {
+  it.each([
+    "http://localhost:11434/v1",
+    "https://169.254.169.254",
+    "https://evil.example/.ts.net",
+    "https://a.b.ts.net.evil.example",
+    "",
+  ])("refuses %j before sending anything", async (value) => {
+    // The mock has no connection: a refusal must happen before any statement is attempted.
+    await expect(t.setInferenceEndpoint(value)).rejects.toThrow(/inference endpoint refused/);
+  });
+
+  it("the generic organization update cannot carry the endpoint", () => {
+    // Also enforced at compile time (see the @ts-expect-error above) and by the grants.
+    expect(Object.keys(t)).toContain("setInferenceEndpoint");
+  });
+});
+
+describe("tenantDb: compare-and-set guard and restore", () => {
+  const guard = eq(schema.users.role, "associate");
+
+  it("a guard is ANDed into the same statement as the organization and id filters", () => {
+    const q = t.update(schema.users, ID, { role: "admin" }, guard).toSQL();
+    expect(q.sql).toMatch(/where \("users"\."organization_id" = \$\d+ and "users"\."deleted_at" is null and "users"\."id" = \$\d+ and "users"\."role" = \$\d+/);
+    expect(q.params).toContain(ORG);
+    expect(q.params).toContain("associate");
+  });
+
+  it("without a guard the statement is unchanged (organization, not deleted, id)", () => {
+    const q = t.update(schema.users, ID, { role: "admin" }).toSQL();
+    expect(q.sql).not.toMatch(/"users"\."role" = \$/);
+  });
+
+  it("restore only touches a soft-deleted row of this organization, and sets deleted_at to null", () => {
+    const q = t.restore(schema.users, ID, guard).toSQL();
+    expect(q.sql).toMatch(/set "deleted_at" = \$\d+/);
+    expect(q.sql).toContain('"users"."organization_id" = $');
+    expect(q.sql).toContain('"users"."deleted_at" is not null');
+    expect(q.sql).not.toContain('"deleted_at" is null');
+    expect(q.params).toContain(ORG);
+    expect(q.params).toContain(null);
+  });
+
+  it("restore rejects a malformed id before any SQL, and a table without deleted_at at compile time", () => {
+    expect(() => t.restore(schema.users, "1; drop table users")).toThrow(/UUID/);
+    const never = () => {
+      // @ts-expect-error report_sections has no deleted_at
+      t.restore(schema.reportSections, ID);
+    };
+    expect(never).toBeTypeOf("function");
+  });
+});

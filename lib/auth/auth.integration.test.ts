@@ -52,6 +52,17 @@ async function expectPgError(p: PromiseLike<unknown>, code: string) {
   expect(pgCode(err), String((err as Error)?.message)).toBe(code);
 }
 
+async function expectPgErrorLabelled(label: string, p: PromiseLike<unknown>, code: string) {
+  let err: unknown;
+  try {
+    await p;
+  } catch (e) {
+    err = e;
+  }
+  expect(err, `${label}: expected the statement to fail`).toBeDefined();
+  expect(pgCode(err), `${label}: ${String((err as Error)?.message)}`).toBe(code);
+}
+
 type Db = NeonDatabase<typeof schema> & { $client: Pool };
 const BASE = "http://localhost:3000";
 const SECRET = "test-secret-".padEnd(48, "x");
@@ -217,7 +228,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
       expect(setCookie).toMatch(/Max-Age=43200/); // 12 h
       expect(setCookie).toMatch(/Path=\//);
       const ctx = await session(cookie);
-      expect(ctx).toEqual({ userId: u.userId, organizationId: orgId, role: "owner" });
+      expect(ctx).toEqual({ userId: u.userId, organizationId: orgId, role: "owner", signedInAt: expect.any(Date) });
     });
 
     it("sets the idle deadline to 2 hours, not the 12 hour cap", async () => {
@@ -413,13 +424,13 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
 
     it("reads role and organization from the database on every request", async () => {
       const u = await login("role-change", { role: "associate" });
-      expect(await session(u.cookie)).toEqual({ userId: u.userId, organizationId: u.orgId, role: "associate" });
+      expect(await session(u.cookie)).toEqual({ userId: u.userId, organizationId: u.orgId, role: "associate", signedInAt: expect.any(Date) });
       await owner.update(schema.users).set({ role: "admin" }).where(eq(schema.users.id, u.userId));
-      expect(await session(u.cookie)).toEqual({ userId: u.userId, organizationId: u.orgId, role: "admin" });
+      expect(await session(u.cookie)).toEqual({ userId: u.userId, organizationId: u.orgId, role: "admin", signedInAt: expect.any(Date) });
     });
 
     it("a user deactivated mid-session loses the session and all others", async () => {
-      const u = await login("deactivate-midway");
+      const u = await login("deactivate-midway", { role: "associate" });
       const second = await signIn(u.email);
       expect(second.cookie).not.toBe("");
       await owner.update(schema.users).set({ deletedAt: new Date() }).where(eq(schema.users.id, u.userId));
@@ -660,7 +671,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
       const { res, cookie } = await signIn(u.email);
       expect(res.status).toBe(200);
       expect(await strictSession(cookie)).toBeNull();
-      expect(await session(cookie)).toEqual({ userId: u.userId, organizationId: orgId, role: "owner" });
+      expect(await session(cookie)).toEqual({ userId: u.userId, organizationId: orgId, role: "owner", signedInAt: expect.any(Date) });
     });
 
     it("starting enrollment needs the password again, stores the secret and backup codes encrypted, and does not turn MFA on yet", async () => {
@@ -697,7 +708,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
       const e = await enrolled("mfa-enroll");
       const [user] = await owner.select().from(schema.users).where(eq(schema.users.id, e.userId));
       expect(user.twoFactorEnabled).toBe(true);
-      expect(await strictSession(e.cookie)).toEqual({ userId: e.userId, organizationId: e.orgId, role: "owner" });
+      expect(await strictSession(e.cookie)).toEqual({ userId: e.userId, organizationId: e.orgId, role: "owner", signedInAt: expect.any(Date) });
       expect(await strictSession(e.firstCookie)).toBeNull(); // the pre-MFA session was replaced
       expect((await mailTo(e.email, /two-step sign-in was turned on/i)).length).toBe(1);
       expect(await auditRows(e.orgId, "auth.mfa_enrolled")).toHaveLength(1);
@@ -731,7 +742,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
 
       const ok = await verifyCode(c.cookie, totpCode(e.secret));
       expect(ok.status).toBe(200);
-      expect(await strictSession(cookieFrom(ok))).toEqual({ userId: e.userId, organizationId: e.orgId, role: "owner" });
+      expect(await strictSession(cookieFrom(ok))).toEqual({ userId: e.userId, organizationId: e.orgId, role: "owner", signedInAt: expect.any(Date) });
       const logins = await auditRows(e.orgId, "auth.login");
       expect(logins).toHaveLength(loginsBefore + 1);
       expect(logins.at(-1)!.metadata).toMatchObject({ method: "password+totp" });
@@ -854,7 +865,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
         expect(await auditRows(t.orgId, "auth.mfa_device_trusted")).toHaveLength(1);
         const again = await challenge(t.email, t.trust);
         expect(again.body.twoFactorRedirect).toBeUndefined();
-        expect(await strictSession(again.cookie)).toEqual({ userId: t.userId, organizationId: t.orgId, role: "owner" });
+        expect(await strictSession(again.cookie)).toEqual({ userId: t.userId, organizationId: t.orgId, role: "owner", signedInAt: expect.any(Date) });
         const logins = await auditRows(t.orgId, "auth.login");
         expect(logins.at(-1)!.metadata).toMatchObject({ method: "password+trusted_device" });
         // The trust cookie is not a login: a wrong password with it gets nothing.
@@ -984,6 +995,203 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
         expect(await reset(emailFor("nobody"), true)).toEqual({ status: "not_found" });
       });
     });
+
+    describe("owner reset function (migration 0012)", () => {
+      const NO_DATA_FOUND = "P0002";
+      const NOT_IN_STATE = "55000";
+      const reset = (actor: string, target: string) => authDb.execute(sql`select reset_user_mfa(${actor}::uuid, ${target}::uuid)`);
+      async function practice(label: string) {
+        const target = await enrolled(label, { role: "associate" });
+        const actor = await seedUser(target.orgId, `${label}-owner`, { role: "owner" });
+        return { target, actor };
+      }
+      const enrollmentRows = async (userId: string) => (await owner.select().from(schema.authTwoFactors).where(eq(schema.authTwoFactors.userId, userId))).length;
+      const mfaFlag = async (userId: string) => (await owner.select().from(schema.users).where(eq(schema.users.id, userId)))[0].twoFactorEnabled;
+
+      it("an active owner resets a colleague in the same practice: enrollment, sessions and trusted devices go, the audit row is written, nobody else is touched", async () => {
+        const { target, actor } = await practice("fn-ok");
+        const bystander = await enrolled("fn-bystander");
+        const c = await challenge(target.email);
+        const trusted = await verifyCode(c.cookie, totpCode(target.secret), { trustDevice: true });
+        expect(named(trusted, "trust_device")).toBeDefined();
+        await signIn(actor.email); // the actor has a session of their own
+
+        await reset(actor.userId, target.userId);
+
+        expect(await enrollmentRows(target.userId)).toBe(0);
+        expect(await mfaFlag(target.userId)).toBe(false);
+        expect(await sessionCount(target.userId)).toBe(0);
+        expect(await strictSession(target.cookie)).toBeNull();
+        const devices = await owner.select().from(schema.authVerifications).where(eq(schema.authVerifications.value, target.userId));
+        expect(devices).toHaveLength(0);
+        // Their password is untouched, so the next sign-in is gated and sends them to set up a new phone.
+        const [account] = await owner.select().from(schema.authAccounts).where(eq(schema.authAccounts.userId, target.userId));
+        expect(account.password).toBeTruthy();
+        const again = await call("/sign-in/email", { body: { email: target.email, password: GOOD_PASSWORD }, cookie: named(trusted, "trust_device") });
+        expect(await strictSession(cookieFrom(again))).toBeNull();
+        expect(await session(cookieFrom(again))).not.toBeNull();
+
+        const rows = await auditRows(target.orgId, "auth.mfa_reset");
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({ actorUserId: actor.userId, resourceType: "users", resourceId: target.userId, outcome: "success", metadata: { method: "owner_reset" } });
+        // Not touched: the actor's session, another practice's enrollment, flag and sessions.
+        expect(await sessionCount(actor.userId)).toBeGreaterThan(0);
+        expect(await enrollmentRows(bystander.userId)).toBe(1);
+        expect(await mfaFlag(bystander.userId)).toBe(true);
+        expect(await strictSession(bystander.cookie)).not.toBeNull();
+      });
+
+      it("refuses everything but the exact case, each time leaving the target and the audit log untouched", async () => {
+        const { target, actor } = await practice("fn-refuse");
+        const stranger = await practice("fn-refuse-b"); // another practice, with its own owner
+        const associateActor = await seedUser(target.orgId, "fn-assoc", { role: "associate" });
+        const adminActor = await seedUser(target.orgId, "fn-admin", { role: "admin" });
+        const goneOwner = await seedUser(target.orgId, "fn-gone-owner", { role: "owner", deleted: true });
+        const otherOwner = await seedUser(target.orgId, "fn-other-owner", { role: "owner" });
+        const goneTarget = await enrolled("fn-gone-target", { role: "associate" });
+        await owner.update(schema.users).set({ deletedAt: new Date() }).where(eq(schema.users.id, goneTarget.userId));
+        const goneActor = await seedUser(goneTarget.orgId, "fn-gone-target-owner", { role: "owner" });
+
+        const cases: [string, string, string, string][] = [
+          ["an associate as actor", associateActor.userId, target.userId, INSUFFICIENT_PRIVILEGE],
+          ["an admin as actor", adminActor.userId, target.userId, INSUFFICIENT_PRIVILEGE],
+          ["a deactivated owner as actor", goneOwner.userId, target.userId, INSUFFICIENT_PRIVILEGE],
+          ["an actor that does not exist", crypto.randomUUID(), target.userId, INSUFFICIENT_PRIVILEGE],
+          ["an owner resetting themselves", actor.userId, actor.userId, INSUFFICIENT_PRIVILEGE],
+          ["an owner resetting another owner", actor.userId, otherOwner.userId, INSUFFICIENT_PRIVILEGE],
+          ["another practice's owner as actor (target not found there)", stranger.actor.userId, target.userId, NO_DATA_FOUND],
+          ["a target that does not exist", actor.userId, crypto.randomUUID(), NO_DATA_FOUND],
+          ["a deactivated target", goneActor.userId, goneTarget.userId, NOT_IN_STATE],
+        ];
+        for (const [label, a, t, code] of cases) await expectPgErrorLabelled(label, reset(a, t), code);
+
+        expect(await enrollmentRows(target.userId)).toBe(1);
+        expect(await mfaFlag(target.userId)).toBe(true);
+        expect(await strictSession(target.cookie)).not.toBeNull();
+        expect(await enrollmentRows(goneTarget.userId)).toBe(1);
+        expect(await enrollmentRows(stranger.target.userId)).toBe(1);
+        expect(await auditRows(target.orgId, "auth.mfa_reset")).toHaveLength(0);
+        expect(await auditRows(goneTarget.orgId, "auth.mfa_reset")).toHaveLength(0);
+      });
+
+      it("only auth_runtime may call it: not the app role, not the table owner's group, not PUBLIC", async () => {
+        const { target, actor } = await practice("fn-rights");
+        await expectPgError(appPool.query("select reset_user_mfa($1::uuid, $2::uuid)", [actor.userId, target.userId]), INSUFFICIENT_PRIVILEGE);
+        const r = await owner.execute(sql`
+          select has_function_privilege('auth_runtime', 'reset_user_mfa(uuid,uuid)', 'EXECUTE') as auth,
+                 has_function_privilege('app_runtime', 'reset_user_mfa(uuid,uuid)', 'EXECUTE') as app,
+                 exists (select 1 from pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                         where p.proname = 'reset_user_mfa' and a.grantee = 0) as public_can`);
+        expect(r.rows[0]).toEqual({ auth: true, app: false, public_can: false });
+        expect(await enrollmentRows(target.userId)).toBe(1);
+      });
+    });
+
+    describe("owner bootstrap script (scripts/bootstrap-owner.mjs)", () => {
+      async function run(input: { org?: string; email?: string; name?: string; state?: string }, apply: boolean, pool: unknown = ownerPool) {
+        const { bootstrapOwner } = await import("../../scripts/bootstrap-owner.mjs");
+        return bootstrapOwner(pool as never, input, { apply });
+      }
+      const counts = async (email: string, org: string) => ({
+        users: (await owner.select().from(schema.users).where(eq(schema.users.email, email.toLowerCase()))).length,
+        orgs: (await owner.select().from(schema.organizations).where(eq(schema.organizations.name, org))).length,
+      });
+      const fresh = () => ({ org: `Synthetic Bootstrap ${crypto.randomUUID()}`, email: emailFor("bootstrap"), name: "Synthetic Bootstrap Owner" });
+
+      it("a dry run reports what it would create and changes nothing", async () => {
+        const input = fresh();
+        const r = await run(input, false);
+        expect(r).toMatchObject({ status: "dry_run", wouldCreate: { organization: input.org, ownerEmail: input.email, ownerName: input.name } });
+        expect(JSON.stringify(r)).not.toMatch(/password/i);
+        expect(await counts(input.email, input.org)).toEqual({ users: 0, orgs: 0 });
+      });
+
+      it("applying creates the practice, a verified owner and a hashed one-time password, and audits both, without storing the password", async () => {
+        const input = { ...fresh(), email: emailFor("Bootstrap").toUpperCase().replace("@EXAMPLE.TEST", "@Example.Test"), state: "ri", org: `  ${fresh().org}  ` };
+        const r = await run(input, true);
+        expect(r.status).toBe("created");
+        if (r.status !== "created") return;
+        expect(r.temporaryPassword).toMatch(/^([a-z2-9]{5}-){4}[a-z2-9]{5}$/);
+
+        const [org] = await owner.select().from(schema.organizations).where(eq(schema.organizations.id, r.organizationId));
+        expect(org).toMatchObject({ name: input.org.trim(), state: "RI" });
+        const [user] = await owner.select().from(schema.users).where(eq(schema.users.id, r.userId));
+        expect(user).toMatchObject({ organizationId: r.organizationId, role: "owner", emailVerified: true, twoFactorEnabled: false, email: input.email.trim().toLowerCase(), deletedAt: null });
+        const [account] = await owner.select().from(schema.authAccounts).where(eq(schema.authAccounts.userId, r.userId));
+        expect(account.providerId).toBe("credential");
+        expect(account.password).toBeTruthy();
+        expect(account.password).not.toContain(r.temporaryPassword);
+
+        const rows = await auditRows(r.organizationId);
+        expect(rows.map((x) => x.action).sort()).toEqual(["org.created", "user.created"]);
+        for (const row of rows) {
+          expect(row).toMatchObject({ outcome: "success", actorUserId: null });
+          expect(JSON.stringify(row)).not.toContain(r.temporaryPassword);
+          expect(JSON.stringify(row)).not.toContain(input.email.trim().toLowerCase());
+        }
+        // The rows obey the same rules as every other audit event.
+        const { buildAuditRow } = await import("@/lib/audit");
+        for (const row of rows) expect(() => buildAuditRow({ action: row.action as never, resourceType: row.resourceType, metadata: row.metadata as Record<string, string> })).not.toThrow();
+        expect(rows.find((x) => x.action === "user.created")?.metadata).toEqual({ method: "bootstrap_script", role: "owner" });
+      });
+
+      it("the new owner really can sign in with the one-time password, is held at the authenticator step, and ends up an owner of the new practice", async () => {
+        const input = fresh();
+        const r = await run(input, true);
+        if (r.status !== "created") throw new Error("not created");
+        const first = await signIn(input.email, r.temporaryPassword);
+        expect(first.res.status).toBe(200);
+        expect(((await first.res.clone().json()) as { twoFactorRedirect?: boolean }).twoFactorRedirect).toBeUndefined();
+        expect(await strictSession(first.cookie)).toBeNull(); // a password alone is not enough: MFA is required
+        const en = await call("/two-factor/enable", { body: { password: r.temporaryPassword }, cookie: first.cookie });
+        expect(en.status).toBe(200);
+        const secret = new URL(((await en.json()) as { totpURI: string }).totpURI).searchParams.get("secret")!;
+        const verified = await verifyCode(first.cookie, totpCode(secret));
+        expect(verified.status).toBe(200);
+        expect(await strictSession(cookieFrom(verified))).toEqual({ userId: r.userId, organizationId: r.organizationId, role: "owner", signedInAt: expect.any(Date) });
+        // And the wrong password does not work.
+        const wrong = await call("/sign-in/email", { body: { email: input.email, password: "not the temporary password at all" } });
+        expect(wrong.status).toBe(401);
+      });
+
+      it("every run makes a different password", async () => {
+        const a = await run(fresh(), true);
+        const b = await run(fresh(), true);
+        if (a.status !== "created" || b.status !== "created") throw new Error("not created");
+        expect(a.temporaryPassword).not.toBe(b.temporaryPassword);
+        expect(a.organizationId).not.toBe(b.organizationId);
+      });
+
+      it("refuses an address that already has an account, and a practice name that already exists, creating nothing", async () => {
+        const input = fresh();
+        expect((await run(input, true)).status).toBe("created");
+        const before = await counts(input.email, input.org);
+        const sameEmail = await run({ ...fresh(), email: input.email.toUpperCase().replace("@EXAMPLE.TEST", "@Example.Test") }, true);
+        expect(sameEmail).toEqual({ status: "email_exists" });
+        const sameOrg = await run({ ...fresh(), org: input.org.toUpperCase() }, true);
+        expect(sameOrg).toEqual({ status: "org_exists" });
+        expect(await counts(input.email, input.org)).toEqual(before);
+        // A dry run says the same, so Sam finds out before applying.
+        expect(await run({ ...input }, false)).toEqual({ status: "email_exists" });
+      });
+
+      it("one transaction: a failure part-way leaves no practice, no owner and no audit row behind", async () => {
+        const input = fresh();
+        const failing = {
+          connect: async () => {
+            const c = await ownerPool.connect();
+            return {
+              query: (sqlText: string, params?: unknown[]) => (/insert into auth_accounts/.test(sqlText) ? Promise.reject(new Error("simulated failure")) : c.query(sqlText, params)),
+              release: () => c.release(),
+            };
+          },
+        };
+        await expect(run(input, true, failing)).rejects.toThrow("simulated failure");
+        expect(await counts(input.email, input.org)).toEqual({ users: 0, orgs: 0 });
+        // And the next, healthy attempt works: nothing was half-created.
+        expect((await run(input, true)).status).toBe("created");
+      });
+    });
   });
 
   describe("rate limits (audit 03 item 4)", () => {
@@ -1092,7 +1300,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
     it("email is unique across practices, case does not matter, and a deactivated user keeps their address", async () => {
       const orgA = await seedOrg("uniq-a");
       const orgB = await seedOrg("uniq-b");
-      const u = await seedUser(orgA, "uniq");
+      const u = await seedUser(orgA, "uniq", { role: "associate" }); // not the practice's only owner: it gets deactivated below
       await expectPgError(
         owner.insert(schema.users).values({ organizationId: orgB, email: u.email, displayName: "dup", role: "owner" }),
         UNIQUE_VIOLATION,

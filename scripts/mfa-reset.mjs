@@ -10,8 +10,9 @@
 // to set up a new phone. It never prints a secret, a code or a password hash.
 //
 // It uses DATABASE_URL_UNPOOLED (the owner credential, from .env.local), so run it only on a
-// machine you trust, and check the host name it prints before using --apply. The in-app owner
-// reset button arrives with the admin screens (feat/auth-admin).
+// machine you trust, and check the host name it prints before using --apply. For a colleague
+// (associate or admin) the owner can do this from inside the app instead (POST
+// /api/admin/users/{id}/reset-mfa, migration 0012); this script remains the way to recover an OWNER.
 
 export async function resetMfa(pool, rawEmail, { apply }) {
   const email = String(rawEmail ?? "").trim().toLowerCase();

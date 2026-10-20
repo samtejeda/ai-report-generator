@@ -3,12 +3,35 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { audit } from "@/lib/audit";
 import { getAuthDb } from "@/lib/db/auth-db";
-import { createConsoleTransport } from "@/lib/email";
+import { createConsoleTransport, type Mail, type MailTransport } from "@/lib/email";
 import { getAuthEnv } from "@/lib/env";
 import { createAuth, type Auth } from "./auth";
 import { resolveSession, type SessionContext } from "./session";
 
 let instance: Auth | undefined;
+let transport: MailTransport | undefined;
+
+/** The one mail transport for this server process (console in development; see lib/email.ts). */
+export function getMailTransport(): MailTransport {
+  if (!transport) transport = createConsoleTransport({ production: getAuthEnv().NODE_ENV === "production" });
+  return transport;
+}
+
+/**
+ * Sends account mail after the response, and never fails the action it follows: a mail problem is
+ * logged with no recipient and no text. For notices such as "your two-step sign-in was reset".
+ */
+export function sendMailInBackground(mail: Mail): void {
+  const task = getMailTransport()
+    .send(mail)
+    .catch(() => console.error(JSON.stringify({ event: "mail_send_failed" })));
+  try {
+    after(task);
+  } catch {
+    // Outside a request scope: let it finish on its own.
+    void task;
+  }
+}
 
 /** The one Better Auth instance for this server process. */
 export function getAuth(): Auth {
@@ -18,7 +41,7 @@ export function getAuth(): Auth {
     instance = createAuth({
       authDb: getAuthDb(),
       audit: (actor, event) => audit(actor, event),
-      mail: createConsoleTransport({ production }),
+      mail: getMailTransport(),
       baseURL: env.BETTER_AUTH_URL,
       secret: env.BETTER_AUTH_SECRET,
       production,

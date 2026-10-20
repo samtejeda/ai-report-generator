@@ -12,7 +12,8 @@ import { tenantDb, type TenantQuery } from "./tenant";
  *
  *   owner      every client in their practice
  *   associate  only clients with an active assignment to them
- *   admin      none (no clinical content until a grant mechanism exists)
+ *   admin      only clients the owner has granted them, the same assignment rule as an associate
+ *              (Sam, 2026-10-20); with no grant, nothing
  *
  * Underneath: tenantDb adds `organization_id = <session's organization>` to every statement and
  * Postgres row-level security enforces the same. A client that is not visible is simply absent,
@@ -57,7 +58,7 @@ function toView(row: ClientRow): ClientView {
 export function visibilityFilter(session: SessionContext): SQL | undefined | null {
   if (!canReachClinicalContent(session.role)) return null;
   if (seesEveryClient(session.role)) return undefined;
-  if (session.role !== "associate") return null;
+  if (session.role !== "associate" && session.role !== "admin") return null;
   const userId = uuid.parse(session.userId);
   return sql`exists (
     select 1 from ${clientAssignments}

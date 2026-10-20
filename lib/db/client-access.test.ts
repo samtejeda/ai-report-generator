@@ -11,13 +11,13 @@ const mock = drizzle.mock({ schema });
 const ORG = "11111111-1111-4111-8111-111111111111";
 const USER = "22222222-2222-4222-8222-222222222222";
 const ID = "33333333-3333-4333-8333-333333333333";
-const as = (role: SessionContext["role"]): SessionContext => ({ userId: USER, organizationId: ORG, role });
+const as = (role: SessionContext["role"]): SessionContext => ({ userId: USER, organizationId: ORG, role, signedInAt: new Date("2026-10-20T12:00:00Z") });
 
 describe("permission matrix", () => {
-  it("owner and associate reach clinical content; admin does not (option A, 2026-10-19)", () => {
+  it("owner, associate and admin may call the clinical routes; what each sees is decided in the query (admin grant, 2026-10-20)", () => {
     expect(canReachClinicalContent("owner")).toBe(true);
     expect(canReachClinicalContent("associate")).toBe(true);
-    expect(canReachClinicalContent("admin")).toBe(false);
+    expect(canReachClinicalContent("admin")).toBe(true);
   });
 
   it("only the owner sees every client", () => {
@@ -53,9 +53,22 @@ describe("list query per role", () => {
     expect(q.sql).not.toContain(USER);
   });
 
-  it("admin: no query is built at all", () => {
-    expect(listClientsQuery(as("admin"), {}, mock)).toBeNull();
-    expect(getClientQuery(as("admin"), ID, mock)).toBeNull();
+  it("admin: exactly the associate's rule, so an admin sees only clients the owner granted", () => {
+    for (const q of [listClientsQuery(as("admin"), {}, mock)!.toSQL(), getClientQuery(as("admin"), ID, mock)!.toSQL()]) {
+      expect(q.sql).toContain('"clients"."organization_id" = $1');
+      expect(q.sql).toContain('from "client_assignments"');
+      expect(q.sql).toContain('"client_assignments"."organization_id" = "clients"."organization_id"');
+      expect(q.sql).toContain('"client_assignments"."deleted_at" is null');
+      expect(q.params).toContain(USER);
+    }
+    // An admin gets exactly the associate's query: no extra privilege, no shortcut.
+    expect(listClientsQuery(as("admin"), {}, mock)!.toSQL()).toEqual(listClientsQuery(as("associate"), {}, mock)!.toSQL());
+  });
+
+  it("an unknown role: no query is built at all", () => {
+    const stranger = as("visitor" as never);
+    expect(listClientsQuery(stranger, {}, mock)).toBeNull();
+    expect(getClientQuery(stranger, ID, mock)).toBeNull();
   });
 
   it("is ordered newest first with a stable tiebreak", () => {
@@ -107,9 +120,9 @@ describe("failing closed", () => {
     expect(() => visibilityFilter({ ...as("associate"), userId: "' or 1=1 --" })).toThrow();
   });
 
-  it("the async functions return nothing for admin without touching a database", async () => {
-    expect(await listClients(as("admin"), {}, undefined)).toEqual([]);
-    expect(await getClient(as("admin"), ID, undefined)).toBeUndefined();
+  it("the async functions return nothing for an unknown role without touching a database", async () => {
+    expect(await listClients(as("visitor" as never), {}, undefined)).toEqual([]);
+    expect(await getClient(as("visitor" as never), ID, undefined)).toBeUndefined();
     expect(await getClient(as("owner"), "not-a-uuid", undefined)).toBeUndefined();
   });
 });

@@ -12,6 +12,11 @@ export type SessionContext = {
   /** From the database on every request, never from the cookie or request input. */
   organizationId: string;
   role: UserRole;
+  /**
+   * When this session was created, i.e. when the person last signed in (password and, with a
+   * trusted device, the code step skipped by choice). Sensitive actions ask for a recent one.
+   */
+  signedInAt: Date;
 };
 
 const identitySchema = z.object({
@@ -80,5 +85,5 @@ export async function resolveSession(headers: Headers, deps: ResolveDeps): Promi
       .where(and(eq(authSessions.token, session.token), sql`${authSessions.expiresAt} > ${now}`));
   }
 
-  return { userId: user.id, organizationId: user.organizationId, role: user.role };
+  return { userId: user.id, organizationId: user.organizationId, role: user.role, signedInAt: new Date(created) };
 }

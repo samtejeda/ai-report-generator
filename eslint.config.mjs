@@ -29,9 +29,11 @@ const PROCESS_ENV_ALLOWED = [
   "next.config.ts", //                NODE_ENV, for dev-only CSP relaxations
   "instrumentation.ts", //            NEXT_RUNTIME, set by Next itself
   "scripts/mfa-reset.mjs", //         break-glass MFA reset; reads DATABASE_URL_UNPOOLED (owner credential) on purpose
+  "scripts/bootstrap-owner.mjs", //   creates a practice and its first owner; reads DATABASE_URL_UNPOOLED on purpose (approved exception)
   "lib/db/integration.test.ts", //    TEST_DATABASE_URL / TEST_APP_ROLE_PASSWORD (scratch Neon branch, tests only)
   "lib/auth/auth.integration.test.ts", // same TEST_* variables, for the auth flows
   "lib/auth/authz.integration.test.ts", // same TEST_* variables; also sets the runtime variables the real route modules read, pointed at the scratch branch
+  "lib/auth/integration-harness.ts", //   shared test plumbing for the route-level suites: same TEST_* and runtime variables
 ];
 const processEnvMessage =
   "Do not read process.env here. Add the variable to the schema in lib/env.ts and call getEnv(). " +
@@ -63,7 +65,7 @@ const eslintConfig = defineConfig([
   {
     files: ["lib/auth/**/*.{ts,tsx}"],
     // The integration test opens its own pools as the test roles (like lib/db/integration.test.ts).
-    ignores: ["lib/auth/auth.integration.test.ts", "lib/auth/authz.integration.test.ts"],
+    ignores: ["lib/auth/auth.integration.test.ts", "lib/auth/authz.integration.test.ts", "lib/auth/integration-harness.ts"],
     rules: { "no-restricted-imports": ["error", { paths: rawDbPaths, patterns: rawDbPatterns }] },
   },
   // Environment scoping: process.env only in the named files above.

@@ -37,10 +37,21 @@ export const AUDIT_ACTIONS = [
   "authz.denied",
   "client.listed",
   "client.viewed",
+  // Admin (feat/auth-admin). Ids and a role or a "set"/"cleared" word only; never the endpoint URL.
+  "org.inference_endpoint_set",
+  "user.role_changed",
+  "user.deactivated",
+  "user.reactivated",
+  "assignment.created",
+  "assignment.ended",
+  // Written by scripts/bootstrap-owner.mjs (method `bootstrap_script`); there is no sign-up in the app.
+  "org.created",
+  "user.created",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
-export const AUDIT_METADATA_KEYS = ["reason", "ip", "method", "role"] as const;
+// `previous_role` is a role name (owner, associate, admin) and nothing else: it cannot carry PHI.
+export const AUDIT_METADATA_KEYS = ["reason", "ip", "method", "role", "previous_role"] as const;
 const MAX_VALUE_LENGTH = 100;
 
 export type AuditEvent = {

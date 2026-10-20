@@ -5,21 +5,27 @@ import type { UserRole } from "@/lib/db/schema/users";
  *
  *   owner      everything in the practice, including every client
  *   associate  assigned clients and reports only
- *   admin      users and practice administration; NO clinical content (client or report data)
- *              until a grant mechanism exists (designed with the admin screens), so for now
- *              an admin is refused on every clinical route and the data functions return nothing
+ *   admin      users and practice administration; NO clinical content unless granted. A grant
+ *              is the same thing as an associate's assignment (Sam, 2026-10-20: per-client): the
+ *              owner assigns the admin to specific clients through client_assignments, and the
+ *              admin then sees exactly those clients and no others. With no grant an admin sees
+ *              an empty list and a 404 for every id, exactly like an associate with no clients.
  *
  * Roles are read from the database on every request, never from the cookie.
  */
 
-/** Roles that may reach clinical content at all (clients, reports). Anything else is refused. */
-export const CLINICAL_ROLES = ["owner", "associate"] as const satisfies readonly UserRole[];
+/**
+ * Roles that may call the clinical routes (clients, reports) at all. Anything else is refused.
+ * Calling is not seeing: what each role sees is decided inside the query (lib/db/client-access.ts),
+ * so an admin without a grant gets nothing back from a route it is allowed to call.
+ */
+export const CLINICAL_ROLES = ["owner", "associate", "admin"] as const satisfies readonly UserRole[];
 
 export function canReachClinicalContent(role: UserRole): boolean {
   return (CLINICAL_ROLES as readonly string[]).includes(role);
 }
 
-/** Owner sees every client in the practice; an associate only the assigned ones. */
+/** Owner sees every client in the practice; an associate or an admin only the assigned ones. */
 export function seesEveryClient(role: UserRole): boolean {
   return role === "owner";
 }

@@ -71,6 +71,27 @@
       "when": 1792444113571,
       "tag": "0009_client_assignments",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792517916721,
+      "tag": "0010_org_settings_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792518528644,
+      "tag": "0011_users_keep_an_owner",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792520709848,
+      "tag": "0012_reset_user_mfa",
+      "breakpoints": true
     }
   ]
 }

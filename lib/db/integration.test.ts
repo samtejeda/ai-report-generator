@@ -582,4 +582,141 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
       await expect(tA.purgeClient("1; drop table clients")).rejects.toThrow(/UUID/);
     });
   });
+  describe("inference endpoint allow-list (audit 04 item 8; migration 0010)", () => {
+    const GOOD = "https://studio-mac.tail1234.ts.net/v1";
+
+    it("the app role cannot write inference_endpoint or model_config, even on its own organization", async () => {
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update organizations set inference_endpoint = ${GOOD} where id = ${A.orgId}`)), INSUFFICIENT_PRIVILEGE);
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update organizations set model_config = '{"worker":"x"}'::jsonb where id = ${A.orgId}`)), INSUFFICIENT_PRIVILEGE);
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update organizations set baa_signed_at = now() where id = ${A.orgId}`)), INSUFFICIENT_PRIVILEGE);
+      expect((await tA.organization())?.inferenceEndpoint).toBeNull();
+    });
+
+    it("the ordinary fields (name, type, state) are still writable through updateOrganization", async () => {
+      const [updated] = await tA.updateOrganization({ name: "Synthetic Org A" });
+      expect(updated.name).toBe("Synthetic Org A");
+    });
+
+    it("the database refuses a value outside the allow-list even from the table owner", async () => {
+      for (const bad of ["http://localhost:11434/v1", "https://169.254.169.254", "https://evil.example/.ts.net", "https://a.b.ts.net.evil.example", "http://a.b.ts.net", "https://A.b.ts.net", "https://xn--a.b.ts.net", "https://a.b.ts.net:11434"]) {
+        await expectPgError(owner.execute(sql`update organizations set inference_endpoint = ${bad} where id = ${A.orgId}`), CHECK_VIOLATION);
+      }
+      await expectPgError(owner.execute(sql`update organizations set inference_endpoint = ${"https://" + "a".repeat(250) + ".b.ts.net"} where id = ${A.orgId}`), CHECK_VIOLATION);
+      expect((await tA.organization())?.inferenceEndpoint).toBeNull();
+    });
+
+    it("setInferenceEndpoint sets and clears the endpoint for this organization only", async () => {
+      await tA.setInferenceEndpoint(GOOD);
+      expect((await tA.organization())?.inferenceEndpoint).toBe(GOOD);
+      expect((await tB.organization())?.inferenceEndpoint).toBeNull();
+      await tA.setInferenceEndpoint(null);
+      expect((await tA.organization())?.inferenceEndpoint).toBeNull();
+    });
+
+    it("a refused value changes nothing, whether the helper or the database says no", async () => {
+      await tA.setInferenceEndpoint(GOOD);
+      await expect(tA.setInferenceEndpoint("http://localhost:11434/v1")).rejects.toThrow(/inference endpoint refused/);
+      // Straight to the function, skipping the helper: the CHECK constraint is the backstop.
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`select set_inference_endpoint(${A.orgId}::uuid, 'http://169.254.169.254')`)), CHECK_VIOLATION);
+      expect((await tA.organization())?.inferenceEndpoint).toBe(GOOD);
+      await tA.setInferenceEndpoint(null);
+    });
+
+    it("the function refuses another organization, and refuses to run with no tenant bound", async () => {
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`select set_inference_endpoint(${B.orgId}::uuid, ${GOOD})`)), INSUFFICIENT_PRIVILEGE);
+      await expectPgError(app.execute(sql`select set_inference_endpoint(${A.orgId}::uuid, ${GOOD})`), INSUFFICIENT_PRIVILEGE);
+      expect((await tB.organization())?.inferenceEndpoint).toBeNull();
+      expect((await tA.organization())?.inferenceEndpoint).toBeNull();
+    });
+
+    it("only app_runtime may execute the function (not PUBLIC, not the auth role)", async () => {
+      const r = await owner.execute(sql`
+        select has_function_privilege('app_runtime', 'set_inference_endpoint(uuid,text)', 'EXECUTE') as app,
+               has_function_privilege('auth_runtime', 'set_inference_endpoint(uuid,text)', 'EXECUTE') as auth,
+               exists (select 1 from pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                       where p.proname = 'set_inference_endpoint' and a.grantee = 0) as public_can
+      `);
+      expect(r.rows[0]).toEqual({ app: true, auth: false, public_can: false });
+    });
+  });
+  describe("a practice keeps an owner (migration 0011)", () => {
+    // A fresh practice per test so the counts are exact.
+    async function practice(label: string, owners: number) {
+      const [org] = await owner.insert(schema.organizations).values({ name: `Synthetic Org ${label}` }).returning();
+      const t = tenantDb({ organizationId: org.id }, owner);
+      const made: string[] = [];
+      for (let i = 0; i < owners; i++) {
+        const [u] = await t.insert(schema.users, { email: `${label}-${i}-${org.id}@example.test`, displayName: `Synthetic ${label} ${i}`, role: "owner" });
+        made.push(u.id);
+      }
+      return { orgId: org.id, owners: made };
+    }
+    const activeOwners = async (orgId: string) =>
+      (await owner.execute(sql`select id from users where organization_id = ${orgId} and role = 'owner' and deleted_at is null`)).rows.length;
+
+    it("the only owner cannot be demoted or deactivated, by anyone, in any role", async () => {
+      const p = await practice("keep1", 1);
+      await expectPgError(owner.execute(sql`update users set role = 'admin' where id = ${p.owners[0]}`), RESTRICT_VIOLATION);
+      await expectPgError(owner.execute(sql`update users set deleted_at = now() where id = ${p.owners[0]}`), RESTRICT_VIOLATION);
+      // As the application role, through tenantDb, the same.
+      const tp = tenantDb({ organizationId: p.orgId }, app);
+      await expectPgError(tp.update(schema.users, p.owners[0], { role: "associate" }), RESTRICT_VIOLATION);
+      await expectPgError(tp.update(schema.users, p.owners[0], { deletedAt: new Date() }), RESTRICT_VIOLATION);
+      expect(await activeOwners(p.orgId)).toBe(1);
+    });
+
+    it("with a second owner one can step down, and then the remaining one is protected", async () => {
+      const p = await practice("keep2", 2);
+      await owner.execute(sql`update users set role = 'admin' where id = ${p.owners[0]}`);
+      expect(await activeOwners(p.orgId)).toBe(1);
+      await expectPgError(owner.execute(sql`update users set deleted_at = now() where id = ${p.owners[1]}`), RESTRICT_VIOLATION);
+      // Promoting someone else first makes it possible again.
+      await owner.execute(sql`update users set role = 'owner' where id = ${p.owners[0]}`);
+      await owner.execute(sql`update users set deleted_at = now() where id = ${p.owners[1]}`);
+      expect(await activeOwners(p.orgId)).toBe(1);
+    });
+
+    it("a deactivated owner does not count, and changing other people or other columns is never blocked", async () => {
+      const p = await practice("keep3", 2);
+      const t = tenantDb({ organizationId: p.orgId }, owner);
+      const [assoc] = await t.insert(schema.users, { email: `keep3-assoc-${p.orgId}@example.test`, displayName: "Synthetic assoc", role: "associate" });
+      await owner.execute(sql`update users set deleted_at = now() where id = ${p.owners[1]}`);
+      await expectPgError(owner.execute(sql`update users set role = 'admin' where id = ${p.owners[0]}`), RESTRICT_VIOLATION);
+      await owner.execute(sql`update users set role = 'admin', display_name = 'Synthetic renamed' where id = ${assoc.id}`);
+      await owner.execute(sql`update users set display_name = 'Synthetic owner renamed' where id = ${p.owners[0]}`);
+      // A deactivated owner can be restored and changed freely: it does not count as an owner.
+      await owner.execute(sql`update users set deleted_at = null where id = ${p.owners[1]}`);
+      expect(await activeOwners(p.orgId)).toBe(2);
+    });
+
+    it("another practice's owners do not count", async () => {
+      const a = await practice("keep4a", 1);
+      await practice("keep4b", 3);
+      await expectPgError(owner.execute(sql`update users set role = 'admin' where id = ${a.owners[0]}`), RESTRICT_VIOLATION);
+    });
+
+    it("two owners demoting each other at the same moment: the second is refused (advisory lock)", async () => {
+      const p = await practice("keep5", 2);
+      const [a, b] = p.owners;
+      const c1 = await ownerPool.connect();
+      const c2 = await ownerPool.connect();
+      try {
+        await c1.query("begin");
+        await c1.query("update users set role = 'associate' where id = $1", [b]);
+        // c1 holds the practice's owner lock until it commits, so c2 has to wait for it.
+        const second = c2.query("update users set role = 'associate' where id = $1", [a]).then(
+          () => "succeeded" as const,
+          (e: unknown) => pgCode(e) ?? "failed",
+        );
+        await new Promise((r) => setTimeout(r, 1500));
+        await c1.query("commit");
+        expect(await second).toBe(RESTRICT_VIOLATION);
+      } finally {
+        await c1.query("rollback").catch(() => {});
+        c1.release();
+        c2.release();
+      }
+      expect(await activeOwners(p.orgId)).toBe(1);
+    });
+  });
 });
