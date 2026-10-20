@@ -283,6 +283,7 @@ Node >= 22 (developed on Node 24), npm.
 ## CI and deploy
 
 - CI runs on every PR: lint, typecheck, tests, Drizzle migration check, build.
+- A separate advisory `integration` job runs the database suites against a CI-only Neon project (secret `CI_DATABASE_URL`, never a `dev` or `test` branch URL; see `docs/RUNBOOK.md`). The required `checks` job holds no secrets.
 - `main` is branch-protected on the checks job; merging to `main` deploys to Vercel.
 - Migrations are forward-only and backward-compatible with the previous deploy. Rollback reverts code, not schema.
 - Standard Vercel/Neon tiers with synthetic data only until Phase C BAA upgrades are done.

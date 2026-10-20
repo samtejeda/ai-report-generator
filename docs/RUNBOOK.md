@@ -90,6 +90,18 @@ Who sees which client is decided inside the query (`lib/db/client-access.ts`): t
 - **Symptom: a page is blank for an admin.** By design: `/clients` shows an admin the 404 page and `/api/clients` answers 403. The refusal is in `audit_log` as `authz.denied` (role and reason only).
 - **Public pages and endpoints** are the one list in `lib/auth/public-surface.ts`; the proxy lets those through and everything else needs a session cookie. A route, page or server action added without a guard fails CI (`lib/auth/guard-coverage.test.ts`).
 
+## CI integration tests (the `integration` job)
+
+The three database suites (`lib/db/integration.test.ts`, `lib/auth/auth.integration.test.ts`, `lib/auth/authz.integration.test.ts`) run in CI as the `integration` job in `.github/workflows/ci.yml`, against a **CI-only Neon project** (synthetic data only). It is separate from the required `checks` job, which holds no secrets. The job is advisory until it has been green on a few PRs.
+
+- **Why a separate project:** Neon logins belong to the whole project, so the owner login on the `test` branch is the same login as on `dev`. A GitHub secret holding it would be the `dev` owner credential. The CI project has its own owner password and holds nothing else. Never put a `dev` or `test` branch URL into a GitHub secret.
+- **The secret:** one repository secret, `CI_DATABASE_URL`, the CI project's direct (unpooled) owner connection string. The job applies migrations with it, then the suites use it to create their own login roles with a random per-run password (generated in the job and masked; there is nothing else to store).
+- **Who can read it:** only the migrate and test steps of the `integration` job. It runs for `push` to `main` and for pull requests from this repository, not from forks, and not for Dependabot. Without the secret the job passes with every step skipped.
+- **Rotate:** reset the owner password in the Neon console for the CI project, then `gh secret set CI_DATABASE_URL` with the new string. No code change.
+- **Reset the CI database:** the suites clean up after themselves, but a cancelled run can leave synthetic rows. Delete the leftover branch data or recreate the CI project's database, then re-run the job; it applies all migrations from scratch.
+- **Symptom: the job is green but nothing ran.** The gate step found no `CI_DATABASE_URL` (secret missing or the PR came from a fork). Check the first step's log.
+- **Symptom: a suite fails with timeouts or dropped WebSocket connections and no assertion failure.** These suites are slow and network-sensitive (see PROGRESS.md, `feat/auth-core`). Re-run the job once before treating it as a regression.
+
 ## Hard deletion of a client
 
 `SELECT purge_client(<org_uuid>, <client_uuid>)` (via `tenantDb(ctx).purgeClient(id)`; the function refuses an organization other than the transaction's tenant) deletes the client and all derived rows and returns per-table counts; it is not wired to any route and **needs Sam's explicit approval before it touches anything but synthetic data**. `audit_log` is never touched. Purged data persists in Neon history/backups until the retention window passes: a wording question for the privacy lawyer (see PROGRESS pre-launch checklist).
