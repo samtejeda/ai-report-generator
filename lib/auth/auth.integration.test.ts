@@ -1086,6 +1086,112 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
         expect(await enrollmentRows(target.userId)).toBe(1);
       });
     });
+
+    describe("owner bootstrap script (scripts/bootstrap-owner.mjs)", () => {
+      async function run(input: { org?: string; email?: string; name?: string; state?: string }, apply: boolean, pool: unknown = ownerPool) {
+        const { bootstrapOwner } = await import("../../scripts/bootstrap-owner.mjs");
+        return bootstrapOwner(pool as never, input, { apply });
+      }
+      const counts = async (email: string, org: string) => ({
+        users: (await owner.select().from(schema.users).where(eq(schema.users.email, email.toLowerCase()))).length,
+        orgs: (await owner.select().from(schema.organizations).where(eq(schema.organizations.name, org))).length,
+      });
+      const fresh = () => ({ org: `Synthetic Bootstrap ${crypto.randomUUID()}`, email: emailFor("bootstrap"), name: "Synthetic Bootstrap Owner" });
+
+      it("a dry run reports what it would create and changes nothing", async () => {
+        const input = fresh();
+        const r = await run(input, false);
+        expect(r).toMatchObject({ status: "dry_run", wouldCreate: { organization: input.org, ownerEmail: input.email, ownerName: input.name } });
+        expect(JSON.stringify(r)).not.toMatch(/password/i);
+        expect(await counts(input.email, input.org)).toEqual({ users: 0, orgs: 0 });
+      });
+
+      it("applying creates the practice, a verified owner and a hashed one-time password, and audits both, without storing the password", async () => {
+        const input = { ...fresh(), email: emailFor("Bootstrap").toUpperCase().replace("@EXAMPLE.TEST", "@Example.Test"), state: "ri", org: `  ${fresh().org}  ` };
+        const r = await run(input, true);
+        expect(r.status).toBe("created");
+        if (r.status !== "created") return;
+        expect(r.temporaryPassword).toMatch(/^([a-z2-9]{5}-){4}[a-z2-9]{5}$/);
+
+        const [org] = await owner.select().from(schema.organizations).where(eq(schema.organizations.id, r.organizationId));
+        expect(org).toMatchObject({ name: input.org.trim(), state: "RI" });
+        const [user] = await owner.select().from(schema.users).where(eq(schema.users.id, r.userId));
+        expect(user).toMatchObject({ organizationId: r.organizationId, role: "owner", emailVerified: true, twoFactorEnabled: false, email: input.email.trim().toLowerCase(), deletedAt: null });
+        const [account] = await owner.select().from(schema.authAccounts).where(eq(schema.authAccounts.userId, r.userId));
+        expect(account.providerId).toBe("credential");
+        expect(account.password).toBeTruthy();
+        expect(account.password).not.toContain(r.temporaryPassword);
+
+        const rows = await auditRows(r.organizationId);
+        expect(rows.map((x) => x.action).sort()).toEqual(["org.created", "user.created"]);
+        for (const row of rows) {
+          expect(row).toMatchObject({ outcome: "success", actorUserId: null });
+          expect(JSON.stringify(row)).not.toContain(r.temporaryPassword);
+          expect(JSON.stringify(row)).not.toContain(input.email.trim().toLowerCase());
+        }
+        // The rows obey the same rules as every other audit event.
+        const { buildAuditRow } = await import("@/lib/audit");
+        for (const row of rows) expect(() => buildAuditRow({ action: row.action as never, resourceType: row.resourceType, metadata: row.metadata as Record<string, string> })).not.toThrow();
+        expect(rows.find((x) => x.action === "user.created")?.metadata).toEqual({ method: "bootstrap_script", role: "owner" });
+      });
+
+      it("the new owner really can sign in with the one-time password, is held at the authenticator step, and ends up an owner of the new practice", async () => {
+        const input = fresh();
+        const r = await run(input, true);
+        if (r.status !== "created") throw new Error("not created");
+        const first = await signIn(input.email, r.temporaryPassword);
+        expect(first.res.status).toBe(200);
+        expect(((await first.res.clone().json()) as { twoFactorRedirect?: boolean }).twoFactorRedirect).toBeUndefined();
+        expect(await strictSession(first.cookie)).toBeNull(); // a password alone is not enough: MFA is required
+        const en = await call("/two-factor/enable", { body: { password: r.temporaryPassword }, cookie: first.cookie });
+        expect(en.status).toBe(200);
+        const secret = new URL(((await en.json()) as { totpURI: string }).totpURI).searchParams.get("secret")!;
+        const verified = await verifyCode(first.cookie, totpCode(secret));
+        expect(verified.status).toBe(200);
+        expect(await strictSession(cookieFrom(verified))).toEqual({ userId: r.userId, organizationId: r.organizationId, role: "owner", signedInAt: expect.any(Date) });
+        // And the wrong password does not work.
+        const wrong = await call("/sign-in/email", { body: { email: input.email, password: "not the temporary password at all" } });
+        expect(wrong.status).toBe(401);
+      });
+
+      it("every run makes a different password", async () => {
+        const a = await run(fresh(), true);
+        const b = await run(fresh(), true);
+        if (a.status !== "created" || b.status !== "created") throw new Error("not created");
+        expect(a.temporaryPassword).not.toBe(b.temporaryPassword);
+        expect(a.organizationId).not.toBe(b.organizationId);
+      });
+
+      it("refuses an address that already has an account, and a practice name that already exists, creating nothing", async () => {
+        const input = fresh();
+        expect((await run(input, true)).status).toBe("created");
+        const before = await counts(input.email, input.org);
+        const sameEmail = await run({ ...fresh(), email: input.email.toUpperCase().replace("@EXAMPLE.TEST", "@Example.Test") }, true);
+        expect(sameEmail).toEqual({ status: "email_exists" });
+        const sameOrg = await run({ ...fresh(), org: input.org.toUpperCase() }, true);
+        expect(sameOrg).toEqual({ status: "org_exists" });
+        expect(await counts(input.email, input.org)).toEqual(before);
+        // A dry run says the same, so Sam finds out before applying.
+        expect(await run({ ...input }, false)).toEqual({ status: "email_exists" });
+      });
+
+      it("one transaction: a failure part-way leaves no practice, no owner and no audit row behind", async () => {
+        const input = fresh();
+        const failing = {
+          connect: async () => {
+            const c = await ownerPool.connect();
+            return {
+              query: (sqlText: string, params?: unknown[]) => (/insert into auth_accounts/.test(sqlText) ? Promise.reject(new Error("simulated failure")) : c.query(sqlText, params)),
+              release: () => c.release(),
+            };
+          },
+        };
+        await expect(run(input, true, failing)).rejects.toThrow("simulated failure");
+        expect(await counts(input.email, input.org)).toEqual({ users: 0, orgs: 0 });
+        // And the next, healthy attempt works: nothing was half-created.
+        expect((await run(input, true)).status).toBe("created");
+      });
+    });
   });
 
   describe("rate limits (audit 03 item 4)", () => {

@@ -44,6 +44,9 @@ export const AUDIT_ACTIONS = [
   "user.reactivated",
   "assignment.created",
   "assignment.ended",
+  // Written by scripts/bootstrap-owner.mjs (method `bootstrap_script`); there is no sign-up in the app.
+  "org.created",
+  "user.created",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 

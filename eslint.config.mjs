@@ -29,6 +29,7 @@ const PROCESS_ENV_ALLOWED = [
   "next.config.ts", //                NODE_ENV, for dev-only CSP relaxations
   "instrumentation.ts", //            NEXT_RUNTIME, set by Next itself
   "scripts/mfa-reset.mjs", //         break-glass MFA reset; reads DATABASE_URL_UNPOOLED (owner credential) on purpose
+  "scripts/bootstrap-owner.mjs", //   creates a practice and its first owner; reads DATABASE_URL_UNPOOLED on purpose (approved exception)
   "lib/db/integration.test.ts", //    TEST_DATABASE_URL / TEST_APP_ROLE_PASSWORD (scratch Neon branch, tests only)
   "lib/auth/auth.integration.test.ts", // same TEST_* variables, for the auth flows
   "lib/auth/authz.integration.test.ts", // same TEST_* variables; also sets the runtime variables the real route modules read, pointed at the scratch branch
