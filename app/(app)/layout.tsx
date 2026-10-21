@@ -13,6 +13,7 @@ async function SignedIn({ children }: { children: ReactNode }) {
     <>
       <nav className="flex gap-4 border-b border-zinc-200 p-3 text-sm">
         {canReachClinicalContent(role) ? <Link href="/clients">Clients</Link> : null}
+        {role === "owner" ? <Link href="/admin">Practice</Link> : null}
         <Link href="/account">Account</Link>
       </nav>
       {children}

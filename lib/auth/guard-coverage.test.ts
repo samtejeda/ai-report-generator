@@ -73,7 +73,7 @@ describe("route handlers", () => {
 
 describe("pages", () => {
   it("the scan finds the pages we know about", () => {
-    expect(pages.map(urlPath).sort()).toEqual(["/", "/account", "/account/mfa", "/clients", "/clients/new", "/clients/{id}", "/forgot-password", "/login", "/reports/{id}", "/reset-password"]);
+    expect(pages.map(urlPath).sort()).toEqual(["/", "/account", "/account/mfa", "/admin", "/clients", "/clients/new", "/clients/{id}", "/forgot-password", "/login", "/reports/{id}", "/reset-password"]);
   });
 
   const publicPagePaths = new Set(PUBLIC_PAGES.map((p) => p.path));
@@ -109,6 +109,13 @@ describe("layouts (the second layer, never the only one)", () => {
     expect(read("app/(app)/layout.tsx")).toMatch(/requireSession\(/);
     expect(read("app/(app)/clients/layout.tsx")).toMatch(/requireRole\(\s*"owner",\s*"associate",\s*"admin"\s*\)/);
     expect(read("app/(app)/reports/layout.tsx")).toMatch(/requireRole\(\s*"owner",\s*"associate",\s*"admin"\s*\)/);
+  });
+
+  it("the practice administration area is owner only, in the layout and in every page", () => {
+    expect(read("app/(app)/admin/layout.tsx")).toMatch(/requireRole\(\s*"owner"\s*\)/);
+    const adminPages = pages.filter((f) => f.startsWith("app/(app)/admin/"));
+    expect(adminPages.length).toBeGreaterThan(0);
+    for (const file of adminPages) expect(read(file), file).toMatch(/requireRole\(\s*"owner"\s*\)/);
   });
 
   it("every page under (app) also checks for itself, whatever the layouts do", () => {
