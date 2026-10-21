@@ -1,4 +1,5 @@
 import { ChangeRoleForm } from "@/components/admin/change-role-form";
+import { ResetMfaButton } from "@/components/admin/reset-mfa-button";
 import { UserActiveButton } from "@/components/admin/user-active-button";
 import { userActionsFor } from "@/lib/admin/user-actions";
 import type { SessionContext } from "@/lib/auth/session";
@@ -9,6 +10,9 @@ import { USER_ROLES } from "@/lib/db/schema/users";
 // server's own who-may-change-whom rule; the routes re-check every action.
 export function UserRow({ actor, user }: { actor: SessionContext; user: UserView }) {
   const actions = userActionsFor(actor, user);
+  // Asked as if an authenticator were enrolled, so the button (and the confirmation after a reset)
+  // stays mounted once the reset clears the flag; it is disabled when there is nothing to reset.
+  const mayReset = userActionsFor(actor, { ...user, mfaEnabled: true }).resetMfa;
   return (
     <li className="flex flex-col gap-2 border-b border-zinc-200 pb-3 text-sm">
       <p className="font-medium">
@@ -35,6 +39,7 @@ export function UserRow({ actor, user }: { actor: SessionContext; user: UserView
       </dl>
       {actions.changeRole ? <ChangeRoleForm userId={user.id} name={user.displayName} currentRole={user.role} roles={USER_ROLES} /> : null}
       {actions.deactivate || actions.reactivate ? <UserActiveButton userId={user.id} name={user.displayName} active={user.active} /> : null}
+      {mayReset ? <ResetMfaButton userId={user.id} name={user.displayName} enrolled={user.mfaEnabled} /> : null}
     </li>
   );
 }
