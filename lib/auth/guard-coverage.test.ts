@@ -45,7 +45,7 @@ const OWN_CHECK_PAGES: Record<string, string> = {
 
 describe("route handlers", () => {
   it("the scan finds the routes we know about (guards against it silently finding nothing)", () => {
-    expect(routes.map(urlPath).sort()).toEqual(["/api/admin/assignments", "/api/admin/assignments/{id}", "/api/admin/inference-endpoint", "/api/admin/users", "/api/admin/users/{id}", "/api/admin/users/{id}/deactivate", "/api/admin/users/{id}/reactivate", "/api/admin/users/{id}/reset-mfa", "/api/auth", "/api/clients", "/api/clients/{id}", "/api/health", "/api/me"]);
+    expect(routes.map(urlPath).sort()).toEqual(["/api/admin/assignments", "/api/admin/assignments/{id}", "/api/admin/inference-endpoint", "/api/admin/users", "/api/admin/users/{id}", "/api/admin/users/{id}/deactivate", "/api/admin/users/{id}/reactivate", "/api/admin/users/{id}/reset-mfa", "/api/auth", "/api/clients", "/api/clients/{id}", "/api/health", "/api/me", "/api/reports", "/api/reports/{id}", "/api/reports/{id}/finalize", "/api/reports/{id}/sections/{sectionId}", "/api/reports/{id}/sections/{sectionId}/versions"]);
   });
 
   const publicApiPaths = new Set(PUBLIC_API.map((a) => a.path));
@@ -73,7 +73,7 @@ describe("route handlers", () => {
 
 describe("pages", () => {
   it("the scan finds the pages we know about", () => {
-    expect(pages.map(urlPath).sort()).toEqual(["/", "/account", "/account/mfa", "/clients", "/clients/new", "/clients/{id}", "/forgot-password", "/login", "/reset-password"]);
+    expect(pages.map(urlPath).sort()).toEqual(["/", "/account", "/account/mfa", "/clients", "/clients/new", "/clients/{id}", "/forgot-password", "/login", "/reports/{id}", "/reset-password"]);
   });
 
   const publicPagePaths = new Set(PUBLIC_PAGES.map((p) => p.path));
@@ -108,6 +108,7 @@ describe("layouts (the second layer, never the only one)", () => {
   it("the (app) group requires a session, and the clients area requires a clinical role", () => {
     expect(read("app/(app)/layout.tsx")).toMatch(/requireSession\(/);
     expect(read("app/(app)/clients/layout.tsx")).toMatch(/requireRole\(\s*"owner",\s*"associate",\s*"admin"\s*\)/);
+    expect(read("app/(app)/reports/layout.tsx")).toMatch(/requireRole\(\s*"owner",\s*"associate",\s*"admin"\s*\)/);
   });
 
   it("every page under (app) also checks for itself, whatever the layouts do", () => {

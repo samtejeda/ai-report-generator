@@ -43,3 +43,10 @@ export const CLIENT_DELETE_ROLES = ["owner"] as const satisfies readonly UserRol
 export function canWriteClients(role: UserRole): boolean {
   return (CLIENT_WRITE_ROLES as readonly string[]).includes(role);
 }
+
+/**
+ * Who may create, edit and finalize a report (plan "client CRUD + report shell", Sam 2026-10-21).
+ * Same people as client writes: an admin with a client grant READS that client's reports and
+ * never writes them. An associate writes only reports of clients assigned to them (the query).
+ */
+export const REPORT_WRITE_ROLES = ["owner", "associate"] as const satisfies readonly UserRole[];

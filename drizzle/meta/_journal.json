@@ -92,6 +92,13 @@
       "when": 1792520709848,
       "tag": "0012_reset_user_mfa",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1792603726589,
+      "tag": "0013_report_status_integrity",
+      "breakpoints": true
     }
   ]
 }

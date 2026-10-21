@@ -23,7 +23,7 @@ const routes = routeFiles("app").map((file) => ({
 
 describe("API inventory", () => {
   it("finds the known routes (guards against the scan silently finding nothing)", () => {
-    expect(routes.map((r) => r.path).sort()).toEqual(["/api/admin/assignments", "/api/admin/assignments/{id}", "/api/admin/inference-endpoint", "/api/admin/users", "/api/admin/users/{id}", "/api/admin/users/{id}/deactivate", "/api/admin/users/{id}/reactivate", "/api/admin/users/{id}/reset-mfa", "/api/auth", "/api/clients", "/api/clients/{id}", "/api/health", "/api/me"]);
+    expect(routes.map((r) => r.path).sort()).toEqual(["/api/admin/assignments", "/api/admin/assignments/{id}", "/api/admin/inference-endpoint", "/api/admin/users", "/api/admin/users/{id}", "/api/admin/users/{id}/deactivate", "/api/admin/users/{id}/reactivate", "/api/admin/users/{id}/reset-mfa", "/api/auth", "/api/clients", "/api/clients/{id}", "/api/health", "/api/me", "/api/reports", "/api/reports/{id}", "/api/reports/{id}/finalize", "/api/reports/{id}/sections/{sectionId}", "/api/reports/{id}/sections/{sectionId}/versions"]);
   });
 
   it.each(routes.map((r) => [r.file, r.path] as const))("%s is documented in API.md as %s", (_file, path) => {

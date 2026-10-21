@@ -57,7 +57,7 @@ describe("buildAuditRow (what may be written)", () => {
 
   it("the allow-list holds no key that names client content", () => {
     for (const key of AUDIT_METADATA_KEYS) expect(key).not.toMatch(/name|note|body|content|text|email|password|token|secret/);
-    for (const action of AUDIT_ACTIONS) expect(action).toMatch(/^[a-z]+\.[a-z_]+$/);
+    for (const action of AUDIT_ACTIONS) expect(action).toMatch(/^[a-z_]+\.[a-z_]+$/);
   });
 });
 
