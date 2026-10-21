@@ -472,7 +472,9 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
         tA.insert(schema.reportVersions, { reportId: A.reportId, sectionId: A.sectionId, versionNumber: 50, editType: "human_edit", content: {} }),
         CHECK_VIOLATION,
       );
-      await expectPgError(tA.update(schema.reports, A.reportId, { status: "finalized" }), CHECK_VIOLATION);
+      // 0013: the transition trigger (draft -> finalized) fires before the CHECK constraint can.
+      await expectPgError(tA.update(schema.reports, A.reportId, { status: "finalized" }), RESTRICT_VIOLATION);
+      await expectPgError(tA.update(schema.reports, A.reportId, { finalizedAt: new Date() }), CHECK_VIOLATION);
       await expectPgError(
         tA.insert(schema.ragDocuments, { sourceType: "client_note", title: "orphaned client content" }),
         CHECK_VIOLATION,
@@ -717,6 +719,126 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
         c2.release();
       }
       expect(await activeOwners(p.orgId)).toBe(1);
+    });
+  });
+  describe("report integrity (feat/report-shell; migration 0013)", () => {
+    // A fresh report (and one section) for each test, created as the table owner so any starting
+    // status can be set directly; the triggers under test fire on UPDATE and on version INSERT.
+    async function freshReport(status: "draft" | "generating" | "generated" | "error" | "finalized" = "draft") {
+      const [client] = await owner.insert(schema.clients).values({ organizationId: A.orgId, displayName: "Synthetic integrity" }).returning();
+      const [report] = await owner
+        .insert(schema.reports)
+        .values({
+          organizationId: A.orgId, clientId: client.id, templateId: A.templateId, methodologyPromptId: A.promptId, createdByUserId: A.userId,
+          status, finalizedAt: status === "finalized" ? new Date() : null,
+        })
+        .returning();
+      const [section] = await owner
+        .insert(schema.reportSections)
+        .values({ organizationId: A.orgId, reportId: report.id, sectionKey: "summary", sectionType: "prose", position: 1 })
+        .returning();
+      return { reportId: report.id, sectionId: section.id, clientId: client.id };
+    }
+    const setStatus = (id: string, status: string, finalized = false) =>
+      asOrg(A.orgId, (tx) => tx.execute(finalized ? sql`update reports set status = ${status}, finalized_at = now() where id = ${id}` : sql`update reports set status = ${status} where id = ${id}`));
+
+    it("status moves only along the allowed transitions (as the app role)", async () => {
+      const r = await freshReport("draft");
+      await expectPgError(setStatus(r.reportId, "finalized", true), RESTRICT_VIOLATION); // never straight from draft
+      await expectPgError(setStatus(r.reportId, "generated"), RESTRICT_VIOLATION);
+      await expectPgError(setStatus(r.reportId, "error"), RESTRICT_VIOLATION);
+      await setStatus(r.reportId, "generating");
+      await setStatus(r.reportId, "error");
+      await expectPgError(setStatus(r.reportId, "finalized", true), RESTRICT_VIOLATION); // not from error
+      await setStatus(r.reportId, "generating");
+      await expectPgError(setStatus(r.reportId, "draft"), RESTRICT_VIOLATION);
+      await setStatus(r.reportId, "generated");
+      await expectPgError(setStatus(r.reportId, "draft"), RESTRICT_VIOLATION);
+      await expectPgError(setStatus(r.reportId, "generating"), RESTRICT_VIOLATION);
+      await setStatus(r.reportId, "finalized", true);
+      for (const back of ["draft", "generating", "generated", "error"]) await expectPgError(setStatus(r.reportId, back), RESTRICT_VIOLATION);
+    });
+
+    it("the table owner is held to the same transitions (the trigger is not a grant)", async () => {
+      const r = await freshReport("finalized");
+      await expectPgError(owner.execute(sql`update reports set status = 'generated', finalized_at = null where id = ${r.reportId}`), RESTRICT_VIOLATION);
+    });
+
+    it("a finalized report accepts no new version, from the app or from the owner; a generated one does", async () => {
+      const done = await freshReport("finalized");
+      await expectPgError(
+        tA.insert(schema.reportVersions, { reportId: done.reportId, sectionId: done.sectionId, versionNumber: 1, editType: "human_edit", content: { text: "late" }, createdByUserId: A.userId }),
+        RESTRICT_VIOLATION,
+      );
+      await expectPgError(
+        owner.insert(schema.reportVersions).values({ organizationId: A.orgId, reportId: done.reportId, sectionId: done.sectionId, versionNumber: 1, editType: "ai_generated", content: {} }),
+        RESTRICT_VIOLATION,
+      );
+      const open = await freshReport("generated");
+      const [v] = await tA.insert(schema.reportVersions, { reportId: open.reportId, sectionId: open.sectionId, versionNumber: 1, editType: "human_edit", content: { text: "ok" }, createdByUserId: A.userId });
+      expect(v.versionNumber).toBe(1);
+    });
+
+    it("the app role can no longer re-point a report or rename a section, but can still move status and soft-delete", async () => {
+      const r = await freshReport("draft");
+      for (const stmt of [
+        sql`update reports set client_id = ${A.client2Id} where id = ${r.reportId}`,
+        sql`update reports set template_id = ${A.template2Id} where id = ${r.reportId}`,
+        sql`update reports set methodology_prompt_id = ${A.prompt2Id} where id = ${r.reportId}`,
+        sql`update reports set created_by_user_id = ${A.userId} where id = ${r.reportId}`,
+        sql`update reports set created_at = now() where id = ${r.reportId}`,
+        sql`update report_sections set section_key = 'renamed' where id = ${r.sectionId}`,
+        sql`update report_sections set position = 9 where id = ${r.sectionId}`,
+        sql`update report_sections set section_type = 'structured' where id = ${r.sectionId}`,
+      ]) await expectPgError(asOrg(A.orgId, (tx) => tx.execute(stmt)), INSUFFICIENT_PRIVILEGE);
+      await asOrg(A.orgId, (tx) => tx.execute(sql`update report_sections set updated_at = now() where id = ${r.sectionId}`));
+      await asOrg(A.orgId, (tx) => tx.execute(sql`update reports set deleted_at = now() where id = ${r.reportId}`));
+      const row = (await owner.select().from(schema.reports).where(eq(schema.reports.id, r.reportId)))[0];
+      expect(row.deletedAt).not.toBeNull();
+    });
+
+    it("an edit and a finalize at the same moment take turns: finalize waits for the edit, and a finalize that wins refuses the edit", async () => {
+      const r = await freshReport("generated");
+      const c1 = await appPool.connect();
+      const c2 = await appPool.connect();
+      const bind = async (c: typeof c1) => {
+        await c.query("begin");
+        await c.query("select set_config('app.organization_id', $1, true)", [A.orgId]);
+      };
+      try {
+        // 1. An edit is in flight (its insert holds a share lock on the report row).
+        await bind(c1);
+        await c1.query("insert into report_versions (organization_id, report_id, section_id, version_number, edit_type, content, created_by_user_id) values ($1,$2,$3,1,'human_edit','{\"text\":\"x\"}',$4)", [A.orgId, r.reportId, r.sectionId, A.userId]);
+        await bind(c2);
+        await c2.query("set local lock_timeout = '700ms'");
+        let outcome = "succeeded";
+        try {
+          await c2.query("update reports set status = 'finalized', finalized_at = now() where id = $1", [r.reportId]);
+        } catch (e) {
+          outcome = pgCode(e) ?? "failed";
+        }
+        expect(outcome).toBe("55P03"); // lock_not_available: the finalize had to wait for the edit
+        await c2.query("rollback");
+        await c1.query("commit");
+
+        // 2. Finalize first: a later edit is refused.
+        await bind(c2);
+        await c2.query("update reports set status = 'finalized', finalized_at = now() where id = $1", [r.reportId]);
+        await c2.query("commit");
+        await bind(c1);
+        let late = "succeeded";
+        try {
+          await c1.query("insert into report_versions (organization_id, report_id, section_id, version_number, edit_type, content, created_by_user_id) values ($1,$2,$3,2,'human_edit','{\"text\":\"y\"}',$4)", [A.orgId, r.reportId, r.sectionId, A.userId]);
+        } catch (e) {
+          late = pgCode(e) ?? "failed";
+        }
+        expect(late).toBe(RESTRICT_VIOLATION);
+      } finally {
+        await c1.query("rollback").catch(() => {});
+        await c2.query("rollback").catch(() => {});
+        c1.release();
+        c2.release();
+      }
     });
   });
 });

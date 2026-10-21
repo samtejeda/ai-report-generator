@@ -48,6 +48,15 @@ export const AUDIT_ACTIONS = [
   "user.reactivated",
   "assignment.created",
   "assignment.ended",
+  // Reports (feat/report-shell). Report, section-version and template ids and the caller's role; never section text.
+  "report.listed",
+  "report.viewed",
+  "report.created",
+  "report.section_edited",
+  "report.finalized",
+  // Written by scripts/seed-report-template.mjs (method `seed_script`).
+  "template.created",
+  "methodology_prompt.created",
   // Written by scripts/bootstrap-owner.mjs (method `bootstrap_script`); there is no sign-up in the app.
   "org.created",
   "user.created",
