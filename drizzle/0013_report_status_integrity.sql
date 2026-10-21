@@ -15,6 +15,11 @@
 CREATE OR REPLACE FUNCTION reports_enforce_status() RETURNS trigger
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 BEGIN
+  -- The closing time of a finalized report is part of the record: it never moves.
+  IF OLD.status = 'finalized' AND NEW.finalized_at IS DISTINCT FROM OLD.finalized_at THEN
+    RAISE EXCEPTION 'the finalization time of a finalized report cannot change'
+      USING ERRCODE = 'restrict_violation';
+  END IF;
   IF NEW.status IS NOT DISTINCT FROM OLD.status THEN
     RETURN NEW;
   END IF;
@@ -32,7 +37,7 @@ BEGIN
 END
 $$;
 --> statement-breakpoint
-CREATE TRIGGER reports_enforce_status BEFORE UPDATE OF status ON reports
+CREATE TRIGGER reports_enforce_status BEFORE UPDATE OF status, finalized_at ON reports
   FOR EACH ROW EXECUTE FUNCTION reports_enforce_status();
 --> statement-breakpoint
 

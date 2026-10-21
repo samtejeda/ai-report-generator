@@ -759,6 +759,12 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
       for (const back of ["draft", "generating", "generated", "error"]) await expectPgError(setStatus(r.reportId, back), RESTRICT_VIOLATION);
     });
 
+    it("a finalized report's closing time never moves, even with the status unchanged", async () => {
+      const r = await freshReport("finalized");
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update reports set finalized_at = now() + interval '1 day' where id = ${r.reportId}`)), RESTRICT_VIOLATION);
+      await asOrg(A.orgId, (tx) => tx.execute(sql`update reports set status = 'finalized' where id = ${r.reportId}`)); // a no-op write is harmless
+    });
+
     it("the table owner is held to the same transitions (the trigger is not a grant)", async () => {
       const r = await freshReport("finalized");
       await expectPgError(owner.execute(sql`update reports set status = 'generated', finalized_at = null where id = ${r.reportId}`), RESTRICT_VIOLATION);
