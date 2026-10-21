@@ -29,3 +29,17 @@ export function canReachClinicalContent(role: UserRole): boolean {
 export function seesEveryClient(role: UserRole): boolean {
   return role === "owner";
 }
+
+/**
+ * Who may create and edit a client record (Sam, 2026-10-21, plan "client CRUD + report shell").
+ * An admin never writes clinical records, not even for a client the owner granted them: a grant
+ * is read access. An associate edits only clients assigned to them (the query enforces that).
+ */
+export const CLIENT_WRITE_ROLES = ["owner", "associate"] as const satisfies readonly UserRole[];
+
+/** Soft-deleting a client hides it and every report under it from everyone: owner only. */
+export const CLIENT_DELETE_ROLES = ["owner"] as const satisfies readonly UserRole[];
+
+export function canWriteClients(role: UserRole): boolean {
+  return (CLIENT_WRITE_ROLES as readonly string[]).includes(role);
+}

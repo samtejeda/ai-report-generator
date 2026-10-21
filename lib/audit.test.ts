@@ -47,6 +47,14 @@ describe("buildAuditRow (what may be written)", () => {
     expect(() => buildAuditRow({ action: "auth.login", resourceType: "Users; drop" })).toThrow(/resourceType/);
   });
 
+  it("`fields` accepts only the closed list of client column names", () => {
+    const ok = buildAuditRow({ action: "client.updated", resourceType: "client", metadata: { fields: "display_name,grade_level" } });
+    expect(ok.metadata.fields).toBe("display_name,grade_level");
+    for (const bad of ["Jane Doe", "display_name,Jane", "2015-04-02", "", "display_name,", "email"]) {
+      expect(() => buildAuditRow({ action: "client.updated", resourceType: "client", metadata: { fields: bad } }), bad).toThrow(/known field list/);
+    }
+  });
+
   it("the allow-list holds no key that names client content", () => {
     for (const key of AUDIT_METADATA_KEYS) expect(key).not.toMatch(/name|note|body|content|text|email|password|token|secret/);
     for (const action of AUDIT_ACTIONS) expect(action).toMatch(/^[a-z]+\.[a-z_]+$/);
