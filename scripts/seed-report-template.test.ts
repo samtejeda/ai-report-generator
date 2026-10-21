@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { templateSlug, templateStructureSchema } from "@/lib/reports/structure";
+import { PSYCHOED_TEMPLATE_SLUG, templateSlug, templateStructureSchema } from "@/lib/reports/structure";
 import { PLACEHOLDER_CONTENT, PLACEHOLDER_NOTES, seedReportTemplate, TEMPLATE_SLUG, TEMPLATE_STRUCTURE } from "./seed-report-template.mjs";
 
 describe("what the script would create", () => {
   it("the structure is valid layout and the slug passes the request validator", () => {
     expect(templateStructureSchema.safeParse(TEMPLATE_STRUCTURE).success).toBe(true);
     expect(templateSlug.safeParse(TEMPLATE_SLUG).success).toBe(true);
+    expect(TEMPLATE_SLUG).toBe(PSYCHOED_TEMPLATE_SLUG);
     expect(TEMPLATE_STRUCTURE.sections.map((s) => s.key)).toEqual([
       "reason_for_referral",
       "background_information",

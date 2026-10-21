@@ -29,3 +29,6 @@ export function parseTemplateStructure(value: unknown): TemplateStructure | null
 
 /** Template slugs in requests: lower-case words and hyphens only. */
 export const templateSlug = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
+
+/** The one report type in v1 (psychoeducational evaluation); scripts/seed-report-template.mjs creates it. */
+export const PSYCHOED_TEMPLATE_SLUG = "psychoeducational-evaluation";

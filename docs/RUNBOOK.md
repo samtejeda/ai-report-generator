@@ -91,9 +91,22 @@ Who sees which client is decided inside the query (`lib/db/client-access.ts`): t
 - **Symptom: a page is blank for an admin.** By design when the owner has granted them no client: `/clients` shows an empty list and `/api/clients` answers `{data: []}`. Grant a client with `POST /api/admin/assignments`. Check the same things as for an associate (grant exists and is not ended, client not deleted, same practice).
 - **Public pages and endpoints** are the one list in `lib/auth/public-surface.ts`; the proxy lets those through and everything else needs a session cookie. A route, page or server action added without a guard fails CI (`lib/auth/guard-coverage.test.ts`).
 
+## Reports: the template, the status rules and migration 0013
+
+**A report cannot exist without a template and a methodology prompt row** (`reports.methodology_prompt_id` is required). `scripts/seed-report-template.mjs` creates a practice's first template, `psychoeducational-evaluation`, whose structure is layout only (six section keys and titles), plus **methodology prompt version 1 as a placeholder** (`{"placeholder": true}`, no methodology text) and points the template at it:
+
+```
+node scripts/seed-report-template.mjs --org "Practice name"            # dry run: prints the database host first; creates nothing
+node scripts/seed-report-template.mjs --org "Practice name" --apply    # one transaction; refuses a duplicate; audited (method seed_script)
+```
+
+It uses the owner credential (`DATABASE_URL_UNPOOLED`), so check the host it prints before `--apply`. Synthetic data only until Phase C. The practice owner's real prompt is written later as version 2 (prompt rows are immutable; the template's pointer moves). **Reports started before that pin version 1 and are test data.** Whatever generates text must refuse a prompt whose content has `placeholder: true`.
+
+**Status rules live in the database too** (migration `0013_report_status_integrity`): status moves only draft to generating, generating to generated or error, error to generating, generated to finalized; a finalized report never changes status or closing time again and accepts no new section version (the insert takes a share lock on the report row, so an edit and a finalize at the same moment take turns); and the app role can update only `status`, `finalized_at`, `deleted_at`, `updated_at` on `reports` and only `updated_at` on `report_sections`. The same table is `lib/reports/status.ts`; a test keeps them equal. Applying `0013` to a database: check first (read-only) that no report is in a state the table forbids (there are none today, reports did not exist before this PR), then `npm run db:migrate` with the owner credential; afterwards `app_runtime` should hold UPDATE on exactly those columns (`information_schema.column_privileges`). **Symptoms:** "report status cannot change from X to Y" or "a finalized report accepts no new versions" in an error log is the trigger doing its job, not a bug in the database; a 409 on saving a section means the section changed since the editor loaded it (or the report is generating or finalized).
+
 ## CI integration tests (the `integration` job)
 
-The five database suites (`lib/db/integration.test.ts`, `lib/auth/auth.integration.test.ts`, `lib/auth/authz.integration.test.ts`, `lib/auth/admin.integration.test.ts`, `lib/auth/clients.integration.test.ts`) run in CI as the `integration` job in `.github/workflows/ci.yml`, against a **CI-only Neon project** (synthetic data only). It is separate from the required `checks` job, which holds no secrets. The job is advisory until it has been green on a few PRs.
+The six database suites (`lib/db/integration.test.ts`, `lib/auth/auth.integration.test.ts`, `lib/auth/authz.integration.test.ts`, `lib/auth/admin.integration.test.ts`, `lib/auth/clients.integration.test.ts`, `lib/auth/reports.integration.test.ts`) run in CI as the `integration` job in `.github/workflows/ci.yml`, against a **CI-only Neon project** (synthetic data only). It is separate from the required `checks` job, which holds no secrets. The job is advisory until it has been green on a few PRs.
 
 - **Why a separate project:** Neon logins belong to the whole project, so the owner login on the `test` branch is the same login as on `dev`. A GitHub secret holding it would be the `dev` owner credential. The CI project has its own owner password and holds nothing else. Never put a `dev` or `test` branch URL into a GitHub secret.
 - **The secret:** one repository secret, `CI_DATABASE_URL`, the CI project's direct (unpooled) owner connection string. The job applies migrations with it, then the suites use it to create their own login roles with a random per-run password (generated in the job and masked; there is nothing else to store).

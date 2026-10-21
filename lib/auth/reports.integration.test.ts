@@ -227,6 +227,8 @@ describe.skipIf(!ENABLED)("report shell through the real stack", () => {
       expect((await history(ownerB, a.reportId, a.sections[0].id)).status).toBe(404);
       expect((await fin(ownerB, a.reportId)).status).toBe(404);
       expect((await get(ownerA, b.reportId)).status).toBe(404);
+      expect((await get(assocB, a.reportId)).status).toBe(404);
+      expect((await fin(assocB, a.reportId)).status).toBe(404);
       // B's own section id under A's report, and A's section id under B's report: not found either way.
       expect((await save(ownerA, a.reportId, b.sections[0].id, { text: "x", baseVersion: 0 })).status).toBe(404);
       expect((await save(ownerB, b.reportId, a.sections[0].id, { text: "x", baseVersion: 0 })).status).toBe(404);
