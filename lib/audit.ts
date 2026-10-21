@@ -37,6 +37,10 @@ export const AUDIT_ACTIONS = [
   "authz.denied",
   "client.listed",
   "client.viewed",
+  // Client writes (feat/clients-crud). The client id and the caller's role; never a name or a date.
+  "client.created",
+  "client.updated",
+  "client.deleted",
   // Admin (feat/auth-admin). Ids and a role or a "set"/"cleared" word only; never the endpoint URL.
   "org.inference_endpoint_set",
   "user.role_changed",
@@ -51,7 +55,10 @@ export const AUDIT_ACTIONS = [
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
 // `previous_role` is a role name (owner, associate, admin) and nothing else: it cannot carry PHI.
-export const AUDIT_METADATA_KEYS = ["reason", "ip", "method", "role", "previous_role"] as const;
+// `fields` names which client columns a write touched, from the closed list below and nothing else.
+export const AUDIT_METADATA_KEYS = ["reason", "ip", "method", "role", "previous_role", "fields"] as const;
+/** Column names only (never values). A `fields` value outside this list is rejected, so it cannot carry PHI. */
+export const AUDIT_CLIENT_FIELDS = ["display_name", "date_of_birth", "grade_level", "external_id"] as const;
 const MAX_VALUE_LENGTH = 100;
 
 export type AuditEvent = {
@@ -76,6 +83,10 @@ export function buildAuditRow(event: AuditEvent) {
     const kind = typeof value;
     if (kind !== "string" && kind !== "number" && kind !== "boolean") throw new Error(`audit metadata value for ${key} must be a string, number or boolean`);
     if (kind === "string" && (value as string).length > MAX_VALUE_LENGTH) throw new Error(`audit metadata value for ${key} is too long`);
+    if (key === "fields") {
+      const names = String(value).split(",");
+      if (!names.every((n) => (AUDIT_CLIENT_FIELDS as readonly string[]).includes(n))) throw new Error("audit metadata value for fields is not a known field list");
+    }
     metadata[key] = value;
   }
   return {
