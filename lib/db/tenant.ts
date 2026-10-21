@@ -238,6 +238,19 @@ export function tenantDb(ctx: TenantContext, db: Db = getDb()) {
         );
       },
 
+      /**
+       * Takes a transaction-scoped advisory lock named for this organization and `name`, so two
+       * transactions that need to check-then-write a shared limit (a concurrency cap) take turns
+       * instead of both passing the check. Released at commit or rollback; only meaningful inside
+       * `transaction()`, so a standalone call is refused. The key is built from the validated
+       * organization id and a short lower-case name, never from request input.
+       */
+      async lock(name: string): Promise<void> {
+        if (standalone) throw new Error("lock() needs a transaction");
+        if (!/^[a-z_]{1,40}$/.test(name)) throw new Error("lock name must be 1 to 40 lower-case letters or underscores");
+        await exec.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`${orgId}:${name}`}, 0))`);
+      },
+
       /** The caller's own organization row. */
       async organization() {
         const rows = await run(

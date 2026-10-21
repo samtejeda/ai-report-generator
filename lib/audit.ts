@@ -54,6 +54,12 @@ export const AUDIT_ACTIONS = [
   "report.created",
   "report.section_edited",
   "report.finalized",
+  // Generation (feat/generate-section-stub). Report and version ids, the caller's role, and the model
+  // tag, token counts, latency and a failure code from a closed list; never the prompt, the output or
+  // the endpoint.
+  "report.generation_started",
+  "report.generated",
+  "report.generation_failed",
   // Written by scripts/seed-report-template.mjs (method `seed_script`).
   "template.created",
   "methodology_prompt.created",
@@ -65,10 +71,14 @@ export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
 // `previous_role` is a role name (owner, associate, admin) and nothing else: it cannot carry PHI.
 // `fields` names which client columns a write touched, from the closed list below and nothing else.
-export const AUDIT_METADATA_KEYS = ["reason", "ip", "method", "role", "previous_role", "fields"] as const;
+export const AUDIT_METADATA_KEYS = ["reason", "ip", "method", "role", "previous_role", "fields", "mode", "model", "input_tokens", "output_tokens", "latency_ms"] as const;
 /** Column names only (never values). A `fields` value outside this list is rejected, so it cannot carry PHI. */
 export const AUDIT_CLIENT_FIELDS = ["display_name", "date_of_birth", "grade_level", "external_id"] as const;
+/** Why a generation failed: a code, never text from the model or the transport. */
+export const AUDIT_GENERATION_FAILURES = ["unreachable", "timeout", "bad_response", "invalid_output", "invalid_config", "not_implemented", "stale", "internal"] as const;
 const MAX_VALUE_LENGTH = 100;
+// An Ollama tag (same character rules as lib/ai/models.ts), so `model` cannot hold free text.
+const MODEL_TAG = /^(?!.*\/\/)[A-Za-z0-9][A-Za-z0-9._\-:/]{0,99}$/; // no "//", so a URL cannot pass as a tag
 
 export type AuditEvent = {
   action: AuditAction;
@@ -96,7 +106,16 @@ export function buildAuditRow(event: AuditEvent) {
       const names = String(value).split(",");
       if (!names.every((n) => (AUDIT_CLIENT_FIELDS as readonly string[]).includes(n))) throw new Error("audit metadata value for fields is not a known field list");
     }
+    if (key === "mode" && value !== "stub" && value !== "real") throw new Error("audit metadata value for mode must be stub or real");
+    if (key === "model" && !(kind === "string" && MODEL_TAG.test(value as string))) throw new Error("audit metadata value for model is not a model tag");
+    if ((key === "input_tokens" || key === "output_tokens" || key === "latency_ms") && !(kind === "number" && Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 1e9)) {
+      throw new Error(`audit metadata value for ${key} must be a non-negative whole number`);
+    }
     metadata[key] = value;
+  }
+  // A failed generation says why with a code from the closed list, nothing else.
+  if (event.action === "report.generation_failed" && !(AUDIT_GENERATION_FAILURES as readonly string[]).includes(String(metadata.reason))) {
+    throw new Error("audit metadata value for reason is not a known generation failure code");
   }
   return {
     action: event.action,

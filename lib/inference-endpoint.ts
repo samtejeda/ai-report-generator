@@ -47,3 +47,16 @@ export function validateInferenceEndpoint(input: string): EndpointCheck {
   if (!url.hostname.endsWith(".ts.net")) return { ok: false, reason: "not_allowed" };
   return { ok: true, endpoint: value };
 }
+
+/**
+ * The address model requests go to, from the value stored on the organization. The stored value
+ * is checked again here (the database CHECK is the first line, this is the second), then given
+ * the `/v1` path Ollama's OpenAI-compatible API lives under if it does not have it. A value that
+ * fails the allow-list yields no address at all: there is no default to fall back to.
+ */
+export function inferenceBaseUrl(stored: string | null | undefined): { ok: true; baseUrl: string } | { ok: false } {
+  if (typeof stored !== "string") return { ok: false };
+  const checked = validateInferenceEndpoint(stored);
+  if (!checked.ok) return { ok: false };
+  return { ok: true, baseUrl: checked.endpoint.endsWith("/v1") ? checked.endpoint : `${checked.endpoint}/v1` };
+}

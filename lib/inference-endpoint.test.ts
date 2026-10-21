@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { INFERENCE_ENDPOINT_PATTERN } from "@/lib/db/schema/organizations";
-import { INFERENCE_ENDPOINT_MAX_LENGTH, validateInferenceEndpoint } from "./inference-endpoint";
+import { INFERENCE_ENDPOINT_MAX_LENGTH, inferenceBaseUrl, validateInferenceEndpoint } from "./inference-endpoint";
 
 // Audit 04 item 8: only an allow-listed Tailscale address may be stored as a practice's
 // inference endpoint. Synthetic names only.
@@ -125,5 +125,19 @@ describe("the allow-list has one definition", () => {
 
   it("the pattern has no backslashes (identical meaning in JavaScript and Postgres)", () => {
     expect(INFERENCE_ENDPOINT_PATTERN).not.toContain("\\");
+  });
+});
+
+describe("inferenceBaseUrl (the address a generation request goes to)", () => {
+  it("adds /v1 when it is missing and keeps it when present", () => {
+    expect(inferenceBaseUrl("https://studio-mac.tail1234.ts.net")).toEqual({ ok: true, baseUrl: "https://studio-mac.tail1234.ts.net/v1" });
+    expect(inferenceBaseUrl("https://studio-mac.tail1234.ts.net:8443")).toEqual({ ok: true, baseUrl: "https://studio-mac.tail1234.ts.net:8443/v1" });
+    expect(inferenceBaseUrl("https://studio-mac.tail1234.ts.net/v1")).toEqual({ ok: true, baseUrl: "https://studio-mac.tail1234.ts.net/v1" });
+  });
+
+  it("gives no address at all for anything outside the allow-list, a missing value included (no default)", () => {
+    for (const bad of [null, undefined, "", "   ", "http://localhost:11434/v1", "https://api.openai.com/v1", "https://127.0.0.1", "https://evil.example.com/v1", "https://a.ts.net.evil.com", "https://a.b.ts.net/v2", "https://user:pw@a.b.ts.net"]) {
+      expect(inferenceBaseUrl(bad), String(bad)).toEqual({ ok: false });
+    }
   });
 });
