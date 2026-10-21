@@ -73,7 +73,7 @@ describe("route handlers", () => {
 
 describe("pages", () => {
   it("the scan finds the pages we know about", () => {
-    expect(pages.map(urlPath).sort()).toEqual(["/", "/account", "/account/mfa", "/clients", "/forgot-password", "/login", "/reset-password"]);
+    expect(pages.map(urlPath).sort()).toEqual(["/", "/account", "/account/mfa", "/clients", "/clients/new", "/clients/{id}", "/forgot-password", "/login", "/reset-password"]);
   });
 
   const publicPagePaths = new Set(PUBLIC_PAGES.map((p) => p.path));
