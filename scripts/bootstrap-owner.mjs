@@ -13,9 +13,9 @@
 // owner a one-time password (hashed with the same scrypt Better Auth uses); writes two audit rows.
 // It prints the one-time password ONCE and stores only its hash. Hand it to the owner privately
 // (not by email, not in chat with other people). At the first sign-in the owner is sent to set up an
-// authenticator app (MFA is required), and should then replace the password: the account page has no
-// change-password form yet, so use "Forgot password" on /login (in development the emailed link is
-// printed in the server log).
+// authenticator app (MFA is required), and should then replace the password with the "Change
+// password" form on /account. (If the one-time password is lost first, "Forgot password" on /login
+// works too; in development the emailed link is printed in the server log.)
 //
 // It refuses (and changes nothing) if the email already has an account, or an organization with the
 // same name exists. It never prints a hash or any secret except that one-time password.
@@ -142,7 +142,7 @@ async function main() {
     else if (rest.status === "created") {
       console.log("\nOne-time password (shown once, not stored; give it to the owner privately):");
       console.log(`  ${temporaryPassword}`);
-      console.log("\nThe owner signs in and sets up an authenticator app when asked, then replaces this password with \"Forgot password\" on /login (the account page has no change-password form yet).");
+      console.log("\nThe owner signs in and sets up an authenticator app when asked, then replaces this password with the \"Change password\" form on /account.");
     } else process.exitCode = 1;
   } finally {
     await pool.end();
