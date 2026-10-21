@@ -36,10 +36,10 @@ export type ClientView = {
   createdAt: string;
 };
 
-type ClientRow = typeof clients.$inferSelect;
+export type ClientRow = typeof clients.$inferSelect;
 type Db = Parameters<typeof tenantDb>[1];
 
-function toView(row: ClientRow): ClientView {
+export function toClientView(row: ClientRow): ClientView {
   return {
     id: row.id,
     displayName: row.displayName,
@@ -106,7 +106,7 @@ export function getClientQuery(session: SessionContext, id: string, db?: Db): Te
 
 export async function listClients(session: SessionContext, page: { limit?: number; offset?: number } = {}, db?: Db): Promise<ClientView[]> {
   const query = listClientsQuery(session, page, db);
-  return query ? (await query).map(toView) : [];
+  return query ? (await query).map(toClientView) : [];
 }
 
 /** One visible client, or undefined: not found, in another practice, not assigned, or not allowed. */
@@ -114,5 +114,5 @@ export async function getClient(session: SessionContext, id: string, db?: Db): P
   const query = getClientQuery(session, id, db);
   if (!query) return undefined;
   const rows = await query;
-  return rows[0] ? toView(rows[0]) : undefined;
+  return rows[0] ? toClientView(rows[0]) : undefined;
 }
