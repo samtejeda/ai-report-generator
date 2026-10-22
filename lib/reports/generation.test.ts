@@ -89,6 +89,11 @@ describe("limits are sane and consistent", () => {
 describe("the route", () => {
   const route = readFileSync("app/api/reports/[id]/sections/[sectionId]/generate/route.ts", "utf8");
 
+  it("sets maxDuration as a literal (Next.js reads it at build time) equal to the documented limit", () => {
+    expect(route).toMatch(/^export const maxDuration = 60;$/m);
+    expect(GENERATION_ROUTE_MAX_SECONDS).toBe(60);
+  });
+
   it("allows exactly the report writers (the literal list the coverage scan reads equals the constant)", () => {
     const match = route.match(/roles: \[([^\]]*)\]/);
     expect(match).not.toBeNull();

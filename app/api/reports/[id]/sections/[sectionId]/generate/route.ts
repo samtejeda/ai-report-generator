@@ -2,11 +2,12 @@ import { z } from "zod";
 import { jsonError, jsonOk } from "@/lib/api/respond";
 import { guardedRoute } from "@/lib/auth/guard";
 import { failureStatus } from "@/lib/reports/generation";
-import { GENERATION_ROUTE_MAX_SECONDS } from "@/lib/reports/generation-limits";
 import { generateSection } from "@/lib/reports/generate-section";
 
 // The model call can take a while; the call itself gives up after 30 s (lib/reports/generation-limits.ts).
-export const maxDuration = GENERATION_ROUTE_MAX_SECONDS;
+// Next.js reads this at build time, so it must be a literal number, not an imported constant;
+// lib/reports/generation.test.ts keeps it equal to GENERATION_ROUTE_MAX_SECONDS.
+export const maxDuration = 60;
 
 const params = z.object({ id: z.uuid(), sectionId: z.uuid() });
 const noBody = z.strictObject({});
