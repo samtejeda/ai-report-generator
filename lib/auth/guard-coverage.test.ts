@@ -45,7 +45,7 @@ const OWN_CHECK_PAGES: Record<string, string> = {
 
 describe("route handlers", () => {
   it("the scan finds the routes we know about (guards against it silently finding nothing)", () => {
-    expect(routes.map(urlPath).sort()).toEqual(["/api/admin/assignments", "/api/admin/assignments/{id}", "/api/admin/inference-endpoint", "/api/admin/users", "/api/admin/users/{id}", "/api/admin/users/{id}/deactivate", "/api/admin/users/{id}/reactivate", "/api/admin/users/{id}/reset-mfa", "/api/auth", "/api/clients", "/api/clients/{id}", "/api/health", "/api/me", "/api/reports", "/api/reports/{id}", "/api/reports/{id}/finalize", "/api/reports/{id}/sections/{sectionId}", "/api/reports/{id}/sections/{sectionId}/versions"]);
+    expect(routes.map(urlPath).sort()).toEqual(["/api/admin/assignments", "/api/admin/assignments/{id}", "/api/admin/inference-endpoint", "/api/admin/users", "/api/admin/users/{id}", "/api/admin/users/{id}/deactivate", "/api/admin/users/{id}/reactivate", "/api/admin/users/{id}/reset-mfa", "/api/auth", "/api/clients", "/api/clients/{id}", "/api/health", "/api/me", "/api/reports", "/api/reports/{id}", "/api/reports/{id}/finalize", "/api/reports/{id}/sections/{sectionId}", "/api/reports/{id}/sections/{sectionId}/generate", "/api/reports/{id}/sections/{sectionId}/versions"]);
   });
 
   const publicApiPaths = new Set(PUBLIC_API.map((a) => a.path));

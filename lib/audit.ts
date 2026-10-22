@@ -78,7 +78,7 @@ export const AUDIT_CLIENT_FIELDS = ["display_name", "date_of_birth", "grade_leve
 export const AUDIT_GENERATION_FAILURES = ["unreachable", "timeout", "bad_response", "invalid_output", "invalid_config", "not_implemented", "stale", "internal"] as const;
 const MAX_VALUE_LENGTH = 100;
 // An Ollama tag (same character rules as lib/ai/models.ts), so `model` cannot hold free text.
-const MODEL_TAG = /^(?!.*\/\/)[A-Za-z0-9][A-Za-z0-9._\-:/]{0,99}$/; // no "//", so a URL cannot pass as a tag
+export const MODEL_TAG = /^(?!.*\/\/)[A-Za-z0-9][A-Za-z0-9._\-:/]{0,99}$/; // no "//", so a URL cannot pass as a tag
 
 export type AuditEvent = {
   action: AuditAction;

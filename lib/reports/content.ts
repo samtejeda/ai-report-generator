@@ -16,6 +16,18 @@ export type ProseContent = z.infer<typeof proseContentSchema>;
 // breaks and tabs are refused.
 const CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
+/**
+ * Text a model produced, before it may become a section's content: not empty (an empty answer is
+ * a failure, not a blank section), within the same length cap and with the same characters a
+ * person may save.
+ */
+export const generatedTextSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(MAX_SECTION_TEXT)
+  .refine((t) => !CONTROL.test(t));
+
 export const sectionEditBody = z.strictObject({
   text: z
     .string()
