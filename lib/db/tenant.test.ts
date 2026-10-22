@@ -180,3 +180,23 @@ describe("tenantDb: compare-and-set guard and restore", () => {
     expect(never).toBeTypeOf("function");
   });
 });
+
+describe("tenantDb.lock", () => {
+  it("is refused outside a transaction (a standalone lock would be released at once) and for odd names", async () => {
+    await expect(t.lock("generation")).rejects.toThrow(/needs a transaction/);
+  });
+
+  it("only accepts short lower-case names, inside a transaction", async () => {
+    const calls: unknown[] = [];
+    const fake = {
+      transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn({ execute: async (q: unknown) => void calls.push(q) }),
+    } as never;
+    const tx = tenantDb({ organizationId: ORG }, fake);
+    await tx.transaction(async (inner) => {
+      await inner.lock("generation");
+      for (const bad of ["", "Generation", "a b", "x".repeat(41), "a'; select 1 --"]) await expect(inner.lock(bad), bad).rejects.toThrow(/lock name/);
+    });
+    // set_config for the tenant, then the lock; the name and org are bound parameters, not spliced text.
+    expect(calls).toHaveLength(2);
+  });
+});

@@ -56,8 +56,39 @@ describe("buildAuditRow (what may be written)", () => {
   });
 
   it("the allow-list holds no key that names client content", () => {
-    for (const key of AUDIT_METADATA_KEYS) expect(key).not.toMatch(/name|note|body|content|text|email|password|token|secret/);
+    // The two token COUNTS are the only keys allowed to contain "token": they accept whole numbers only (below).
+    for (const key of AUDIT_METADATA_KEYS.filter((k) => k !== "input_tokens" && k !== "output_tokens")) expect(key).not.toMatch(/name|note|body|content|text|email|password|token|secret/);
     for (const action of AUDIT_ACTIONS) expect(action).toMatch(/^[a-z_]+\.[a-z_]+$/);
+  });
+});
+
+describe("generation events (feat/generate-section-stub)", () => {
+  const started = { action: "report.generated", resourceType: "report_version" } as const;
+
+  it("accepts a model tag, whole-number counts and a known mode", () => {
+    const row = buildAuditRow({ ...started, metadata: { role: "owner", mode: "stub", model: "qwen3:1.7b", input_tokens: 12, output_tokens: 3, latency_ms: 840 } });
+    expect(row.metadata).toEqual({ role: "owner", mode: "stub", model: "qwen3:1.7b", input_tokens: 12, output_tokens: 3, latency_ms: 840 });
+  });
+
+  it("rejects free text where a tag, count or mode belongs", () => {
+    for (const model of ["Jane Doe", "https://box.tailnet.ts.net", "x".repeat(101), "", "a b"]) {
+      expect(() => buildAuditRow({ ...started, metadata: { model } }), model).toThrow(/model tag|too long/);
+    }
+    for (const n of [-1, 1.5, Number.NaN, "12", Number.POSITIVE_INFINITY, 2e9]) {
+      expect(() => buildAuditRow({ ...started, metadata: { input_tokens: n as never } }), String(n)).toThrow(/whole number/);
+      expect(() => buildAuditRow({ ...started, metadata: { latency_ms: n as never } }), String(n)).toThrow(/whole number/);
+    }
+    expect(() => buildAuditRow({ ...started, metadata: { mode: "cloud" } })).toThrow(/stub or real/);
+  });
+
+  it("a failed generation carries one code from the closed list and nothing else in `reason`", () => {
+    for (const reason of ["unreachable", "timeout", "bad_response", "invalid_output", "invalid_config", "not_implemented", "stale", "internal"]) {
+      expect(buildAuditRow({ action: "report.generation_failed", resourceType: "report", metadata: { reason } }).metadata.reason).toBe(reason);
+    }
+    for (const reason of ["connect ECONNREFUSED 100.64.0.1:11434", "Jane Doe wrote", "", "set"]) {
+      expect(() => buildAuditRow({ action: "report.generation_failed", resourceType: "report", metadata: { reason } }), reason).toThrow(/generation failure code/);
+    }
+    expect(() => buildAuditRow({ action: "report.generation_failed", resourceType: "report" })).toThrow(/generation failure code/);
   });
 });
 
