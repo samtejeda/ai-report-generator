@@ -613,6 +613,42 @@ describe.skipIf(!ENABLED)("section generation through the real stack", () => {
       expect(await startRows(P.orgId)).toHaveLength(MAX_CONCURRENT_GENERATIONS);
     });
 
+    it("a claim takes the practice's generation lock: while another transaction holds it nothing is sent and nothing changes; it goes ahead when released; another practice is not held up", async () => {
+      const P = await makePractice("lock", { lean: true });
+      const Q = await makePractice("lock-other", { lean: true });
+      const r = await mkReport(P, P.c1.id);
+      const rQ = await mkReport(Q, Q.c1.id);
+      const { tenantDb } = await import("@/lib/db/tenant");
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      let holding!: () => void;
+      const isHolding = new Promise<void>((resolve) => (holding = resolve));
+      const holder = tenantDb({ organizationId: P.orgId }).transaction(async (t) => {
+        await t.lock("generation");
+        holding();
+        await held;
+      });
+      await isHolding;
+
+      let finished = false;
+      const call = gen(P.owner, r.reportId, r.sections[0].id).then((res) => {
+        finished = true;
+        return res;
+      });
+      // The other practice is not affected by this practice's lock.
+      expect((await gen(Q.owner, rQ.reportId, rQ.sections[0].id)).status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      expect(finished).toBe(false);
+      expect(outbound).toHaveLength(1); // only the other practice's
+      expect((await reportRow(r.reportId)).status).toBe("draft");
+
+      release();
+      await holder;
+      expect((await call).status).toBe(200);
+      expect(outbound).toHaveLength(2);
+      expect((await reportRow(r.reportId)).status).toBe("generated");
+    });
+
     it("another practice is not affected by this practice's running generations", async () => {
       const P = await makePractice("busy-a", { lean: true });
       const Q = await makePractice("busy-b", { lean: true });
