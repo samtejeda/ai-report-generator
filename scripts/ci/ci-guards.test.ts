@@ -221,6 +221,16 @@ describe("reset SQL", () => {
     for (const no of ["neondb_owner", "neon_superuser", "cloud_admin", "pg_read_all_data", "app_runtime_", "app_runtime-x", "my_app_runtime", "app_runtime_a_b", "authenticated", "app_runtimeX"]) expect(re.test(no)).toBe(false);
   });
 
+  it("every role the migrations create matches the pattern (else the reset would leave it behind)", () => {
+    const re = new RegExp(ROLE_PATTERN);
+    const names = new Set<string>();
+    for (const f of fs.readdirSync("drizzle").filter((n) => n.endsWith(".sql"))) {
+      for (const m of fs.readFileSync(`drizzle/${f}`, "utf8").matchAll(/^\s*(?:EXECUTE\s+')?\s*CREATE\s+ROLE\s+"?([A-Za-z0-9_]+)"?/gim)) names.add(m[1]);
+    }
+    expect([...names].sort()).toEqual(["app_runtime", "auth_runtime"]);
+    for (const n of names) expect(re.test(n), `role "${n}" would not be dropped by the reset`).toBe(true);
+  });
+
   it("every role name the real integration suites create matches the pattern", () => {
     // A suite that names a role differently would leak it past the reset; fail here instead.
     const re = new RegExp(ROLE_PATTERN);
