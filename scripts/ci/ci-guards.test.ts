@@ -279,17 +279,30 @@ describe("reset flow (fake client)", () => {
   const clean = { public_tables: 0, public_functions: 0, runtime_roles: null, runtime_role_settings: 0, migrations_applied: null, public_owner: FRESH_PUBLIC_OWNER, public_acl: FRESH_PUBLIC_ACL };
   const dirty = { public_tables: 12, public_functions: 3, runtime_roles: "app_runtime,app_runtime_test", runtime_role_settings: 1, migrations_applied: 15 };
 
+  // Each readState() is two queries when the journal exists (state, then the count) and one when
+  // it does not, like the real database.
   function fakeClient(states: Record<string, unknown>[]) {
     const executed: string[] = [];
-    let i = 0;
+    let i = -1;
     return {
       executed,
       async query(text: string) {
         executed.push(text);
-        return text === RESET_SQL ? { rows: [] } : { rows: [states[Math.min(i++, states.length - 1)]] };
+        if (text === RESET_SQL) return { rows: [] };
+        if (text.includes("count(*)::int AS n FROM drizzle.__drizzle_migrations")) return { rows: [{ n: states[i].migrations_applied }] };
+        i = Math.min(i + 1, states.length - 1);
+        const { migrations_applied, ...rest } = states[i];
+        return { rows: [{ ...rest, has_journal: migrations_applied !== null }] };
       },
     };
   }
+
+  it("reads the state without ever naming the journal table in a statement that can run when it is missing", async () => {
+    const c = fakeClient([clean]);
+    await resetDatabase(c, () => {}).catch(() => {});
+    const stateQueries = c.executed.filter((t) => t !== RESET_SQL && !t.includes("count(*)::int AS n"));
+    for (const q of stateQueries) expect(q).not.toMatch(/FROM\s+drizzle\.__drizzle_migrations/i);
+  });
 
   it("reads the state, runs the reset block once, reads the state again, and logs both", async () => {
     const c = fakeClient([dirty, clean]);

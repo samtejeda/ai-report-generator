@@ -91,8 +91,7 @@ SELECT
   (SELECT string_agg(extname, ',' ORDER BY extname) FROM pg_extension) AS extensions,
   (SELECT nspowner::regrole::text FROM pg_namespace WHERE nspname = 'public') AS public_owner,
   (SELECT nspacl::text FROM pg_namespace WHERE nspname = 'public') AS public_acl,
-  CASE WHEN to_regclass('drizzle.__drizzle_migrations') IS NULL THEN NULL
-       ELSE (SELECT count(*)::int FROM drizzle.__drizzle_migrations) END AS migrations_applied
+  to_regclass('drizzle.__drizzle_migrations') IS NOT NULL AS has_journal
 `;
 
 // ---------------------------------------------------------------------------------------------
@@ -187,7 +186,14 @@ export function resetProblems(state) {
 
 export async function readState(client) {
   const { rows } = await client.query(STATE_SQL);
-  return rows[0];
+  const { has_journal: hasJournal, ...state } = rows[0];
+  // A second query, only when the table exists: Postgres resolves every table name when it
+  // parses a statement, even in a CASE branch that is never taken, so one query would fail
+  // right after a reset (when the journal is gone) or on a fresh database.
+  state.migrations_applied = hasJournal
+    ? (await client.query("SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations")).rows[0].n
+    : null;
+  return state;
 }
 
 export async function resetDatabase(client, log = console.log) {
