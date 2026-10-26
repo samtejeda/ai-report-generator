@@ -258,7 +258,7 @@ describe("migration comparison", () => {
     const journal = JSON.parse(fs.readFileSync("drizzle/meta/_journal.json", "utf8"));
     expect(expected).toHaveLength(journal.entries.length);
     expect(expected[0].tag).toBe("0000_enable_pgvector");
-    expect(new Set(expected.map((e) => e.hash)).size).toBe(expected.length);
+    expect(new Set(expected.map((e: { hash: string }) => e.hash)).size).toBe(expected.length);
   });
 
   const expected = [
