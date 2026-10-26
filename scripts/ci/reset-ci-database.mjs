@@ -33,6 +33,16 @@ import { pathToFileURL } from "node:url";
 export const ROLE_PATTERN = "^(app|auth)_runtime(_[a-z0-9]+)?$";
 
 /**
+ * What `public` looks like in a freshly created Postgres 15+ database. Migrations add grants to
+ * it (USAGE to app_runtime and auth_runtime), so "the same as before the reset" would be wrong
+ * from the second run on; the reset recreates it and checks it against THIS instead. If Neon's
+ * fresh database differs, the reset aborts (atomically, nothing dropped) and the message shows
+ * the old and new values.
+ */
+export const FRESH_PUBLIC_OWNER = "pg_database_owner";
+export const FRESH_PUBLIC_ACL = "{pg_database_owner=UC/pg_database_owner,=U/pg_database_owner}";
+
+/**
  * One block, so it is atomic: if anything inside fails, nothing is dropped. The same text is
  * used by `print-sql` and by the local rehearsal, so what was rehearsed is what runs.
  */
@@ -40,20 +50,18 @@ export const RESET_SQL = `
 DO $reset$
 DECLARE
   r record;
-  before_owner text;
   before_acl text;
   after_owner text;
   after_acl text;
 BEGIN
-  SELECT nspowner::regrole::text, nspacl::text INTO before_owner, before_acl
-    FROM pg_namespace WHERE nspname = 'public';
+  SELECT nspacl::text INTO before_acl FROM pg_namespace WHERE nspname = 'public';
 
   -- Tables, functions, triggers, policies, grants on them, the vector extension, and drizzle's
   -- migration journal all live in these two schemas.
   DROP SCHEMA IF EXISTS drizzle CASCADE;
   DROP SCHEMA IF EXISTS public CASCADE;
 
-  -- Recreate public the way a fresh Postgres 15+ database has it.
+  -- Recreate public the way a fresh Postgres 15+ database has it (checked below).
   CREATE SCHEMA public AUTHORIZATION pg_database_owner;
   GRANT USAGE ON SCHEMA public TO PUBLIC;
   COMMENT ON SCHEMA public IS 'standard public schema';
@@ -64,9 +72,9 @@ BEGIN
 
   SELECT nspowner::regrole::text, nspacl::text INTO after_owner, after_acl
     FROM pg_namespace WHERE nspname = 'public';
-  IF before_owner IS DISTINCT FROM after_owner OR before_acl IS DISTINCT FROM after_acl THEN
-    RAISE EXCEPTION 'public schema differs after reset: owner % -> %, acl % -> %',
-      before_owner, after_owner, before_acl, after_acl;
+  IF after_owner IS DISTINCT FROM '${FRESH_PUBLIC_OWNER}' OR after_acl IS DISTINCT FROM '${FRESH_PUBLIC_ACL}' THEN
+    RAISE EXCEPTION 'public schema differs after reset from a fresh database: owner %, acl % (acl before the reset: %)',
+      after_owner, after_acl, before_acl;
   END IF;
 END
 $reset$;
@@ -169,6 +177,7 @@ export function resetProblems(state) {
   if (state.runtime_roles) problems.push(`runtime roles remain: ${state.runtime_roles}`);
   if (state.runtime_role_settings !== 0) problems.push(`${state.runtime_role_settings} role-level setting(s) remain`);
   if (state.migrations_applied !== null) problems.push("drizzle's migration journal still exists");
+  if (state.public_owner !== FRESH_PUBLIC_OWNER || state.public_acl !== FRESH_PUBLIC_ACL) problems.push("public schema is not in the fresh-database state");
   return problems;
 }
 

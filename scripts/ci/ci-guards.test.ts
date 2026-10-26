@@ -10,6 +10,8 @@ import {
   scanInstalled,
 } from "./check-install-scripts.mjs";
 import {
+  FRESH_PUBLIC_ACL,
+  FRESH_PUBLIC_OWNER,
   RESET_SQL,
   ROLE_PATTERN,
   checkHost,
@@ -212,7 +214,7 @@ describe("reset SQL", () => {
 
   it("is one atomic block (a single DO) and fails if the public schema comes back different", () => {
     expect(RESET_SQL.match(/\$reset\$/g)).toHaveLength(2);
-    expect(RESET_SQL).toMatch(/RAISE EXCEPTION 'public schema differs after reset/);
+    expect(RESET_SQL).toMatch(/RAISE EXCEPTION 'public schema differs after reset from a fresh database/);
   });
 
   it("the role pattern matches the migration and suite roles and nothing else", () => {
@@ -274,7 +276,7 @@ describe("migration comparison", () => {
 });
 
 describe("reset flow (fake client)", () => {
-  const clean = { public_tables: 0, public_functions: 0, runtime_roles: null, runtime_role_settings: 0, migrations_applied: null };
+  const clean = { public_tables: 0, public_functions: 0, runtime_roles: null, runtime_role_settings: 0, migrations_applied: null, public_owner: FRESH_PUBLIC_OWNER, public_acl: FRESH_PUBLIC_ACL };
   const dirty = { public_tables: 12, public_functions: 3, runtime_roles: "app_runtime,app_runtime_test", runtime_role_settings: 1, migrations_applied: 15 };
 
   function fakeClient(states: Record<string, unknown>[]) {
@@ -302,6 +304,9 @@ describe("reset flow (fake client)", () => {
   it("fails when anything is left behind", async () => {
     await expect(resetDatabase(fakeClient([dirty, dirty]), () => {})).rejects.toThrow(/did not leave a clean database/);
     expect(resetProblems({ ...clean, runtime_role_settings: 1 })).toEqual(["1 role-level setting(s) remain"]);
+    expect(resetProblems({ ...clean, public_acl: "{pg_database_owner=UC/pg_database_owner,=U/pg_database_owner,app_runtime=U/pg_database_owner}" })).toEqual([
+      "public schema is not in the fresh-database state",
+    ]);
     expect(resetProblems(clean)).toEqual([]);
   });
 });
