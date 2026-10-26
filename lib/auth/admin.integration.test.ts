@@ -44,6 +44,11 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
   const getEndpoint = (who: Person) => h.call(who, endpointRoute.GET, { path: "/api/admin/inference-endpoint" });
   const auditRows = (orgId: string, action: string) =>
     h.owner.select().from(schema.auditLog).where(and(eq(schema.auditLog.organizationId, orgId), eq(schema.auditLog.action, action)));
+  // The query has no ORDER BY and Postgres returns heap order, which is not insertion order on a table
+  // that autovacuum has recycled (measured on the test branch). So a test never slices by a count taken
+  // earlier: it remembers the ids it has seen and looks at the rows that are not among them.
+  const seenDenied = async () => new Set((await auditRows(orgA, "authz.denied")).map((r) => r.id));
+  const newDenied = async (seen: Set<string>) => (await auditRows(orgA, "authz.denied")).filter((r) => !seen.has(r.id));
 
   beforeAll(async () => {
     h = await startHarness({ appRole: "app_runtime_admin", authRole: "auth_runtime_admin", secret: "admin-test-secret-".padEnd(48, "x") });
@@ -496,14 +501,14 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
 
     it("refuses oneself and another owner (the break-glass script is for those), audited with a fixed reason", async () => {
       await h.signedInAgo(ownerA, 5);
-      const before = (await auditRows(orgA, "authz.denied")).length;
+      const seen = await seenDenied();
       expect((await reset(ownerA, ownerA.userId)).status).toBe(403);
       expect((await reset(ownerA, ownerA2.userId)).status).toBe(403);
       expect(await enrollments(ownerA.userId)).toBe(1);
       expect(await enrollments(ownerA2.userId)).toBe(1);
       expect((await me(ownerA2)).status).toBe(200);
-      const reasons = (await auditRows(orgA, "authz.denied")).slice(before).map((d) => (d.metadata as { reason?: string }).reason).sort();
-      expect(reasons).toEqual(["owner_break_glass", "self_change"]);
+      const mine = (await newDenied(seen)).filter((d) => d.actorUserId === ownerA.userId && [ownerA.userId, ownerA2.userId].includes(d.resourceId ?? ""));
+      expect(mine.map((d) => (d.metadata as { reason?: string }).reason).sort()).toEqual(["owner_break_glass", "self_change"]);
     });
 
     it("cross-tenant: another practice's person is the same 404 as a made-up id, and nothing is reset", async () => {
@@ -681,7 +686,7 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
     });
 
     it("nobody changes themselves: 403, audited as self_change, nothing changes", async () => {
-      const before = (await auditRows(orgA, "authz.denied")).length;
+      const seen = await seenDenied();
       for (const [who, r] of [
         [ownerA, await patch(ownerA, ownerA.userId, { role: "associate" })],
         [adminA, await patch(adminA, adminA.userId, { role: "associate" })],
@@ -693,7 +698,7 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
       expect((await dbUser(ownerA.userId)).role).toBe("owner");
       expect((await dbUser(adminA.userId)).role).toBe("admin");
       expect((await dbUser(ownerA.userId)).deletedAt).toBeNull();
-      const denied = (await auditRows(orgA, "authz.denied")).slice(before);
+      const denied = (await newDenied(seen)).filter((d) => d.actorUserId === d.resourceId && [ownerA.userId, adminA.userId].includes(d.actorUserId ?? ""));
       expect(denied.filter((d) => (d.metadata as { reason?: string }).reason === "self_change")).toHaveLength(4);
     });
 

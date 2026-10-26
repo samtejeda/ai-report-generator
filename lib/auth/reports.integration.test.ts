@@ -291,7 +291,7 @@ describe.skipIf(!ENABLED)("report shell through the real stack", () => {
       const foreign = await seedClient(orgB, `Foreign ${tag()}`);
       const deleted = await seedClient(orgA, `Deleted ${tag()}`, { deletedAt: new Date() });
       await assign(deleted.id, assocA, ownerA);
-      const before = (await h.owner.select().from(schema.reports)).length;
+      const before = (await h.owner.select().from(schema.reports).where(inArray(schema.reports.organizationId, [orgA, orgB]))).length;
       const answers = new Set<string>();
       for (const clientId of [c2.id, foreign.id, deleted.id, crypto.randomUUID()]) {
         const r = await create(assocA, { clientId, templateSlug: TEMPLATE_SLUG });
@@ -299,7 +299,7 @@ describe.skipIf(!ENABLED)("report shell through the real stack", () => {
         answers.add(r.text);
       }
       expect(answers.size).toBe(1);
-      expect((await h.owner.select().from(schema.reports)).length).toBe(before);
+      expect((await h.owner.select().from(schema.reports).where(inArray(schema.reports.organizationId, [orgA, orgB]))).length).toBe(before);
     });
 
     it("practice B's owner cannot start a report on practice A's client, even naming A's template slug", async () => {

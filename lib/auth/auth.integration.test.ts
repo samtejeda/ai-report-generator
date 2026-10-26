@@ -745,7 +745,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
       expect(await strictSession(cookieFrom(ok))).toEqual({ userId: e.userId, organizationId: e.orgId, role: "owner", signedInAt: expect.any(Date) });
       const logins = await auditRows(e.orgId, "auth.login");
       expect(logins).toHaveLength(loginsBefore + 1);
-      expect(logins.at(-1)!.metadata).toMatchObject({ method: "password+totp" });
+      expect(logins.filter((l) => (l.metadata as { method?: string }).method === "password+totp")).toHaveLength(1);
     });
 
     it("a wrong code gives no session and is audited; the challenge cannot be replayed after it succeeds", async () => {
@@ -867,7 +867,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
         expect(again.body.twoFactorRedirect).toBeUndefined();
         expect(await strictSession(again.cookie)).toEqual({ userId: t.userId, organizationId: t.orgId, role: "owner", signedInAt: expect.any(Date) });
         const logins = await auditRows(t.orgId, "auth.login");
-        expect(logins.at(-1)!.metadata).toMatchObject({ method: "password+trusted_device" });
+        expect(logins.filter((l) => (l.metadata as { method?: string }).method === "password+trusted_device")).toHaveLength(1);
         // The trust cookie is not a login: a wrong password with it gets nothing.
         const wrong = await call("/sign-in/email", { body: { email: t.email, password: "not the password at all" }, cookie: t.trust });
         expect(wrong.status).toBe(401);
