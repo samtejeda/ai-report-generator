@@ -9,6 +9,18 @@ import {
   packageNameFromLockPath,
   scanInstalled,
 } from "./check-install-scripts.mjs";
+import {
+  FRESH_PUBLIC_ACL,
+  FRESH_PUBLIC_OWNER,
+  RESET_SQL,
+  ROLE_PATTERN,
+  checkHost,
+  compareMigrations,
+  expectedMigrationHashes,
+  redact,
+  resetDatabase,
+  resetProblems,
+} from "./reset-ci-database.mjs";
 
 const REG = "https://registry.npmjs.org";
 const ok = (name: string, extra: Record<string, unknown> = {}) => ({
@@ -126,5 +138,188 @@ describe("install-script scan (installed mode)", () => {
 
     const found = scanInstalled(root);
     expect([...found.keys()].sort()).toEqual(["@s/scoped", "hooked", "inner", "native"]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// CI database reset (scripts/ci/reset-ci-database.mjs)
+// ---------------------------------------------------------------------------------------------
+
+const CI_HOST = "ep-ci-example-123456.c-6.us-east-2.aws.neon.tech";
+const ciUrl = (host: string, pw = "s3cr3t-pw-value") => `postgresql://neondb_owner:${pw}@${host}/neondb?sslmode=require`;
+
+describe("reset guard: host allow-list", () => {
+  it("accepts exactly the allow-listed host (case-insensitive)", () => {
+    expect(checkHost(ciUrl(CI_HOST), CI_HOST)).toEqual({ ok: true });
+    expect(checkHost(ciUrl(CI_HOST.toUpperCase()), CI_HOST)).toEqual({ ok: true });
+  });
+
+  it.each([
+    ["another project's host (dev)", ciUrl("ep-dev-example-999999.c-6.us-east-2.aws.neon.tech")],
+    ["a lookalike suffix", ciUrl(`${CI_HOST}.evil.example`)],
+    ["a lookalike prefix", ciUrl(`x${CI_HOST}`)],
+    ["a userinfo trick", `postgresql://${CI_HOST}:pw@evil.example/neondb`],
+    ["the pooled form of the right host", ciUrl(CI_HOST.replace("ep-ci-example-123456", "ep-ci-example-123456-pooler"))],
+    ["localhost", ciUrl("localhost")],
+  ])("refuses %s", (_label, url) => {
+    expect(checkHost(url, CI_HOST).ok).toBe(false);
+  });
+
+  it("refuses when either value is missing, empty, or not a postgres URL", () => {
+    expect(checkHost(undefined, CI_HOST).ok).toBe(false);
+    expect(checkHost("", CI_HOST).ok).toBe(false);
+    expect(checkHost(ciUrl(CI_HOST), undefined).ok).toBe(false);
+    expect(checkHost(ciUrl(CI_HOST), "  ").ok).toBe(false);
+    expect(checkHost("not a url", CI_HOST).ok).toBe(false);
+    expect(checkHost(`https://${CI_HOST}/`, CI_HOST).ok).toBe(false);
+  });
+
+  it("explains a refusal without echoing the host, user or password", () => {
+    const wrong = ciUrl("ep-dev-example-999999.c-6.us-east-2.aws.neon.tech", "hunter2-hunter2");
+    const v = checkHost(wrong, CI_HOST);
+    expect(v.ok).toBe(false);
+    const text = JSON.stringify(v);
+    for (const secret of ["hunter2-hunter2", "ep-dev-example-999999", "neondb_owner", CI_HOST]) expect(text).not.toContain(secret);
+  });
+});
+
+describe("reset guard: redaction", () => {
+  it("removes the URL, password (plain and percent-encoded), user and host from any message", () => {
+    const url = "postgresql://neondb_owner:p%40ss%2Fword99@ep-x-1.c-6.us-east-2.aws.neon.tech/neondb";
+    const msg = `connect failed for ${url}: password p@ss/word99 rejected for neondb_owner at ep-x-1.c-6.us-east-2.aws.neon.tech`;
+    const out = redact(msg, url);
+    for (const secret of ["p%40ss%2Fword99", "p@ss/word99", "neondb_owner", "ep-x-1.c-6", url]) expect(out).not.toContain(secret);
+    expect(out).toContain("[redacted]");
+  });
+
+  it("leaves a message alone when there is nothing to hide", () => {
+    expect(redact("syntax error at or near DROP", undefined)).toBe("syntax error at or near DROP");
+  });
+});
+
+describe("reset SQL", () => {
+  const dropped = [...RESET_SQL.matchAll(/DROP\s+(\w+)\s+(?:IF EXISTS\s+)?([^\s;%]+)/gi)].map((m) => `${m[1]} ${m[2]}`.toUpperCase());
+
+  it("drops only the drizzle and public schemas, plus roles chosen by the role pattern", () => {
+    expect(dropped.sort()).toEqual(["SCHEMA DRIZZLE", "SCHEMA PUBLIC"]);
+    // The only role drop is inside the loop over roles selected by the pattern.
+    expect(RESET_SQL.match(/DROP ROLE/g)).toHaveLength(1);
+    expect(RESET_SQL).toContain(
+      `FOR r IN SELECT rolname FROM pg_roles WHERE rolname ~ '${ROLE_PATTERN}' ORDER BY rolname LOOP\n    EXECUTE format('DROP ROLE %I', r.rolname);`,
+    );
+    for (const forbidden of [/DROP\s+DATABASE/i, /TRUNCATE/i, /DROP\s+OWNED/i, /DROP\s+EXTENSION/i, /ALTER\s+SYSTEM/i]) {
+      expect(RESET_SQL).not.toMatch(forbidden);
+    }
+  });
+
+  it("is one atomic block (a single DO) and fails if the public schema comes back different", () => {
+    expect(RESET_SQL.match(/\$reset\$/g)).toHaveLength(2);
+    expect(RESET_SQL).toMatch(/RAISE EXCEPTION 'public schema differs after reset from a fresh database/);
+  });
+
+  it("the role pattern matches the migration and suite roles and nothing else", () => {
+    const re = new RegExp(ROLE_PATTERN);
+    for (const ok of ["app_runtime", "auth_runtime", "app_runtime_test", "auth_runtime_authz", "app_runtime_authtest"]) expect(re.test(ok)).toBe(true);
+    for (const no of ["neondb_owner", "neon_superuser", "cloud_admin", "pg_read_all_data", "app_runtime_", "app_runtime-x", "my_app_runtime", "app_runtime_a_b", "authenticated", "app_runtimeX"]) expect(re.test(no)).toBe(false);
+  });
+
+  it("every role the migrations create matches the pattern (else the reset would leave it behind)", () => {
+    const re = new RegExp(ROLE_PATTERN);
+    const names = new Set<string>();
+    for (const f of fs.readdirSync("drizzle").filter((n) => n.endsWith(".sql"))) {
+      for (const m of fs.readFileSync(`drizzle/${f}`, "utf8").matchAll(/^\s*(?:EXECUTE\s+')?\s*CREATE\s+ROLE\s+"?([A-Za-z0-9_]+)"?/gim)) names.add(m[1]);
+    }
+    expect([...names].sort()).toEqual(["app_runtime", "auth_runtime"]);
+    for (const n of names) expect(re.test(n), `role "${n}" would not be dropped by the reset`).toBe(true);
+  });
+
+  it("every role name the real integration suites create matches the pattern", () => {
+    // A suite that names a role differently would leak it past the reset; fail here instead.
+    const re = new RegExp(ROLE_PATTERN);
+    const files = [
+      "lib/db/integration.test.ts",
+      "lib/auth/integration-harness.ts",
+      ...fs.readdirSync("lib/auth").filter((f) => f.endsWith(".integration.test.ts")).map((f) => `lib/auth/${f}`),
+    ];
+    const names = new Set<string>();
+    for (const f of files) {
+      const text = fs.readFileSync(f, "utf8");
+      for (const m of text.matchAll(/(?:APP_ROLE|AUTH_ROLE)\s*=\s*"([^"]+)"/g)) names.add(m[1]);
+      for (const m of text.matchAll(/(?:appRole|authRole):\s*"([^"]+)"/g)) names.add(m[1]);
+    }
+    expect(names.size).toBeGreaterThanOrEqual(10);
+    for (const n of names) expect(re.test(n), `role "${n}" would not be dropped by the reset`).toBe(true);
+  });
+});
+
+describe("migration comparison", () => {
+  it("reads one hash per journal entry from the real drizzle folder", () => {
+    const expected = expectedMigrationHashes("drizzle");
+    const journal = JSON.parse(fs.readFileSync("drizzle/meta/_journal.json", "utf8"));
+    expect(expected).toHaveLength(journal.entries.length);
+    expect(expected[0].tag).toBe("0000_enable_pgvector");
+    expect(new Set(expected.map((e: { hash: string }) => e.hash)).size).toBe(expected.length);
+  });
+
+  const expected = [
+    { tag: "0000_a", hash: "h0" },
+    { tag: "0001_b", hash: "h1" },
+  ];
+  it("passes when the database holds exactly the expected migrations", () => {
+    expect(compareMigrations(expected, ["h1", "h0"])).toEqual([]);
+  });
+  it("reports a missing, an extra (leftover from another branch) and a duplicated migration", () => {
+    expect(compareMigrations(expected, ["h0"])).toEqual(["migration 0001_b is in drizzle/ but not applied"]);
+    expect(compareMigrations(expected, ["h0", "h1", "hX"])[0]).toContain("not in drizzle/");
+    expect(compareMigrations(expected, ["h0", "h1", "h1"])).toEqual(["migration 0001_b is applied 2 times"]);
+  });
+});
+
+describe("reset flow (fake client)", () => {
+  const clean = { public_tables: 0, public_functions: 0, runtime_roles: null, runtime_role_settings: 0, migrations_applied: null, public_owner: FRESH_PUBLIC_OWNER, public_acl: FRESH_PUBLIC_ACL };
+  const dirty = { public_tables: 12, public_functions: 3, runtime_roles: "app_runtime,app_runtime_test", runtime_role_settings: 1, migrations_applied: 15 };
+
+  // Each readState() is two queries when the journal exists (state, then the count) and one when
+  // it does not, like the real database.
+  function fakeClient(states: Record<string, unknown>[]) {
+    const executed: string[] = [];
+    let i = -1;
+    return {
+      executed,
+      async query(text: string) {
+        executed.push(text);
+        if (text === RESET_SQL) return { rows: [] };
+        if (text.includes("count(*)::int AS n FROM drizzle.__drizzle_migrations")) return { rows: [{ n: states[i].migrations_applied }] };
+        i = Math.min(i + 1, states.length - 1);
+        const { migrations_applied, ...rest } = states[i];
+        return { rows: [{ ...rest, has_journal: migrations_applied !== null }] };
+      },
+    };
+  }
+
+  it("reads the state without ever naming the journal table in a statement that can run when it is missing", async () => {
+    const c = fakeClient([clean]);
+    await resetDatabase(c, () => {}).catch(() => {});
+    const stateQueries = c.executed.filter((t) => t !== RESET_SQL && !t.includes("count(*)::int AS n"));
+    for (const q of stateQueries) expect(q).not.toMatch(/FROM\s+drizzle\.__drizzle_migrations/i);
+  });
+
+  it("reads the state, runs the reset block once, reads the state again, and logs both", async () => {
+    const c = fakeClient([dirty, clean]);
+    const lines: string[] = [];
+    await resetDatabase(c, (l: string) => lines.push(l));
+    expect(c.executed.filter((t) => t === RESET_SQL)).toHaveLength(1);
+    expect(lines[0]).toContain("before:");
+    expect(lines[0]).toContain("app_runtime_test");
+    expect(lines[1]).toContain("after:");
+  });
+
+  it("fails when anything is left behind", async () => {
+    await expect(resetDatabase(fakeClient([dirty, dirty]), () => {})).rejects.toThrow(/did not leave a clean database/);
+    expect(resetProblems({ ...clean, runtime_role_settings: 1 })).toEqual(["1 role-level setting(s) remain"]);
+    expect(resetProblems({ ...clean, public_acl: "{pg_database_owner=UC/pg_database_owner,=U/pg_database_owner,app_runtime=U/pg_database_owner}" })).toEqual([
+      "public schema is not in the fresh-database state",
+    ]);
+    expect(resetProblems(clean)).toEqual([]);
   });
 });
