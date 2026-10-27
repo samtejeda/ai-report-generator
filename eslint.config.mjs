@@ -31,6 +31,7 @@ const PROCESS_ENV_ALLOWED = [
   "scripts/mfa-reset.mjs", //         break-glass MFA reset; reads DATABASE_URL_UNPOOLED (owner credential) on purpose
   "scripts/bootstrap-owner.mjs", //   creates a practice and its first owner; reads DATABASE_URL_UNPOOLED on purpose (approved exception)
   "scripts/seed-report-template.mjs", // creates a practice's first report template and a placeholder prompt; reads DATABASE_URL_UNPOOLED on purpose (approved exception, Sam 2026-10-21)
+  "scripts/ci/reset-ci-database.mjs", // CI only: reads CI_DATABASE_URL (owner credential of the CI-only Neon project) and CI_DATABASE_HOST; refuses any other host
   "lib/db/integration.test.ts", //    TEST_DATABASE_URL / TEST_APP_ROLE_PASSWORD (scratch Neon branch, tests only)
   "lib/auth/auth.integration.test.ts", // same TEST_* variables, for the auth flows
   "lib/auth/authz.integration.test.ts", // same TEST_* variables; also sets the runtime variables the real route modules read, pointed at the scratch branch

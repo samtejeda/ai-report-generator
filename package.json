@@ -15,11 +15,11 @@
     "db:check": "drizzle-kit check"
   },
   "dependencies": {
-    "@ai-sdk/openai-compatible": "^3.0.71",
+    "@ai-sdk/openai-compatible": "^3.0.77",
     "@base-ui/react": "^1.9.0",
     "@neondatabase/serverless": "^1.2.0",
-    "ai": "^7.0.138",
-    "better-auth": "1.7.9",
+    "ai": "^7.0.152",
+    "better-auth": "1.7.12",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
     "drizzle-orm": "^0.45.4",
@@ -32,7 +32,7 @@
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
-    "@types/node": "^24.19.2",
+    "@types/node": "^25.9.9",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "drizzle-kit": "^0.31.11",
@@ -41,7 +41,7 @@
     "shadcn": "^4.22.0",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.5"
   },
   "engines": {
     "node": ">=22.0.0"
