@@ -283,7 +283,7 @@ Node >= 22 (developed on Node 24), npm.
 ## CI and deploy
 
 - CI runs on every PR: lint, typecheck, tests, Drizzle migration check, build.
-- A separate advisory `integration` job runs the database suites against a CI-only Neon project (secret `CI_DATABASE_URL` and variable `CI_DATABASE_HOST`, never a `dev` or `test` branch URL; see `docs/RUNBOOK.md`). Every run first resets that database (drops the `public` and `drizzle` schemas and the `app_runtime*`/`auth_runtime*` roles, refusing any host but the CI one), then applies the branch's migrations and verifies them. Roles created by migrations or suites must follow that naming. A missing secret fails the job; fork and Dependabot PRs skip it. The required `checks` job holds no secrets.
+- A separate advisory `integration` job runs the database suites against a CI-only Neon project (secrets `CI_DATABASE_URL` and `CI_DATABASE_HOST`, never a `dev` or `test` branch URL; see `docs/RUNBOOK.md`). Every run first resets that database (drops the `public` and `drizzle` schemas and the `app_runtime*`/`auth_runtime*` roles, refusing any host but the CI one), then applies the branch's migrations and verifies them. Roles created by migrations or suites must follow that naming. A missing secret fails the job; fork and Dependabot PRs skip it. The required `checks` job holds no secrets.
 - `main` is branch-protected on the checks job; merging to `main` deploys to Vercel.
 - Migrations are forward-only and backward-compatible with the previous deploy. Rollback reverts code, not schema.
 - Standard Vercel/Neon tiers with synthetic data only until Phase C BAA upgrades are done.
