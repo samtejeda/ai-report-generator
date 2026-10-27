@@ -74,13 +74,15 @@ jobs:
   # Every run starts by RESETTING that database (scripts/ci/reset-ci-database.mjs): migrations are
   # forward-only and the project is shared, so without it a PR's migration would stay in the
   # database after its run. The reset refuses any host except the allow-listed CI host
-  # (repository variable CI_DATABASE_HOST), then migrations are applied from scratch and checked
-  # against drizzle/.
+  # (repository SECRET CI_DATABASE_HOST: the Actions log of this job is public and a secret is
+  # masked there, a plain variable would be printed in clear), then migrations are applied from
+  # scratch and checked against drizzle/.
   # Advisory: not a required check until Sam makes it one (PROGRESS.md).
   # Safety: `pull_request` only (never `pull_request_target`), same-repo PRs only, Dependabot
   # skipped (by the job condition, on purpose). On a push to main or a same-repo PR a missing
-  # secret or variable FAILS the job instead of skipping it. The secret is visible to the
-  # require, reset, migrate, verify and test steps only, never to `npm ci`.
+  # secret FAILS the job instead of skipping it. The secrets are visible to the require, reset,
+  # migrate, verify and test steps only (the host to the require, reset and verify steps), never
+  # to `npm ci`.
   integration:
     name: integration
     if: >-
@@ -100,11 +102,11 @@ jobs:
       - name: Require the CI database settings
         env:
           CI_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
-          CI_DATABASE_HOST: ${{ vars.CI_DATABASE_HOST }}
+          CI_DATABASE_HOST: ${{ secrets.CI_DATABASE_HOST }}
         run: |
           missing=""
           [ -n "$CI_DATABASE_URL" ] || missing="$missing secret CI_DATABASE_URL;"
-          [ -n "$CI_DATABASE_HOST" ] || missing="$missing variable CI_DATABASE_HOST;"
+          [ -n "$CI_DATABASE_HOST" ] || missing="$missing secret CI_DATABASE_HOST;"
           if [ -n "$missing" ]; then
             echo "::error::The integration job cannot run, not set:$missing see docs/RUNBOOK.md (CI integration tests)."
             exit 1
@@ -131,7 +133,7 @@ jobs:
       - name: Reset the CI database
         env:
           CI_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
-          CI_DATABASE_HOST: ${{ vars.CI_DATABASE_HOST }}
+          CI_DATABASE_HOST: ${{ secrets.CI_DATABASE_HOST }}
         run: node scripts/ci/reset-ci-database.mjs reset
 
       # drizzle.config.ts reads DATABASE_URL_UNPOOLED.
@@ -144,7 +146,7 @@ jobs:
         id: verify
         env:
           CI_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
-          CI_DATABASE_HOST: ${{ vars.CI_DATABASE_HOST }}
+          CI_DATABASE_HOST: ${{ secrets.CI_DATABASE_HOST }}
         run: node scripts/ci/reset-ci-database.mjs verify
 
       # The suites create their own login roles with this password. A new random one per run,

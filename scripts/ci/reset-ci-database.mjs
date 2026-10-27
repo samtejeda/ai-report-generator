@@ -11,7 +11,7 @@
 //   node scripts/ci/reset-ci-database.mjs print-sql  print the reset SQL; connects to nothing
 //
 // reset and verify read the CI database's owner URL from CI_DATABASE_URL and the one host they
-// may talk to from CI_DATABASE_HOST (a repository variable, not a secret). They REFUSE to run
+// may talk to from CI_DATABASE_HOST (a repository secret, so the public Actions log masks it). They REFUSE to run
 // when the URL's host is not exactly that host (so never the dev project or its `test` branch,
 // which have other hosts), when it is a pooled host, or when either value is missing.
 //
