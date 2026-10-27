@@ -71,9 +71,16 @@ jobs:
 
   # Database integration suites against a CI-ONLY Neon project (synthetic data, its own owner
   # password; it is NOT the dev project, whose owner login is shared by every branch in it).
-  # Advisory: not a required check until it has been green on a few PRs (PROGRESS.md).
+  # Every run starts by RESETTING that database (scripts/ci/reset-ci-database.mjs): migrations are
+  # forward-only and the project is shared, so without it a PR's migration would stay in the
+  # database after its run. The reset refuses any host except the allow-listed CI host
+  # (repository variable CI_DATABASE_HOST), then migrations are applied from scratch and checked
+  # against drizzle/.
+  # Advisory: not a required check until Sam makes it one (PROGRESS.md).
   # Safety: `pull_request` only (never `pull_request_target`), same-repo PRs only, Dependabot
-  # skipped, and the secret is visible to the migrate and test steps only, never to `npm ci`.
+  # skipped (by the job condition, on purpose). On a push to main or a same-repo PR a missing
+  # secret or variable FAILS the job instead of skipping it. The secret is visible to the
+  # require, reset, migrate, verify and test steps only, never to `npm ci`.
   integration:
     name: integration
     if: >-
@@ -88,44 +95,61 @@ jobs:
       group: integration-db
       cancel-in-progress: false
     steps:
-      - name: Gate (is the CI database secret present?)
-        id: gate
+      # Fail loudly, never skip: a required check that skipped would hide that nothing ran.
+      # (Fork and Dependabot PRs never reach this step: the job condition above skips them.)
+      - name: Require the CI database settings
         env:
           CI_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
+          CI_DATABASE_HOST: ${{ vars.CI_DATABASE_HOST }}
         run: |
-          if [ -n "$CI_DATABASE_URL" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"; else echo "enabled=false" >> "$GITHUB_OUTPUT"; echo "No CI_DATABASE_URL secret: integration suites skipped."; fi
+          missing=""
+          [ -n "$CI_DATABASE_URL" ] || missing="$missing secret CI_DATABASE_URL;"
+          [ -n "$CI_DATABASE_HOST" ] || missing="$missing variable CI_DATABASE_HOST;"
+          if [ -n "$missing" ]; then
+            echo "::error::The integration job cannot run, not set:$missing see docs/RUNBOOK.md (CI integration tests)."
+            exit 1
+          fi
 
       - uses: actions/checkout@v7
-        if: steps.gate.outputs.enabled == 'true'
 
       - uses: actions/setup-node@v7
-        if: steps.gate.outputs.enabled == 'true'
         with:
           node-version: 24
           cache: npm
 
       # Same supply-chain guards as `checks`, so no install script runs before they pass.
       - name: Lockfile sources and install-script allowlist (before install)
-        if: steps.gate.outputs.enabled == 'true'
         run: |
           node scripts/ci/check-lockfile-registry.mjs
           node scripts/ci/check-install-scripts.mjs lockfile
 
       - name: Install
-        if: steps.gate.outputs.enabled == 'true'
         run: npm ci
 
-      # The database URL is set on these steps only. drizzle.config.ts reads DATABASE_URL_UNPOOLED.
+      # The database URL is set on these steps only (reset, migrate, verify, tests).
+      # Refuses to touch any host but the allow-listed CI host, and prints no URL, host or password.
+      - name: Reset the CI database
+        env:
+          CI_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
+          CI_DATABASE_HOST: ${{ vars.CI_DATABASE_HOST }}
+        run: node scripts/ci/reset-ci-database.mjs reset
+
+      # drizzle.config.ts reads DATABASE_URL_UNPOOLED.
       - name: Apply migrations to the CI database
-        if: steps.gate.outputs.enabled == 'true'
         env:
           DATABASE_URL_UNPOOLED: ${{ secrets.CI_DATABASE_URL }}
         run: npm run db:migrate
 
+      - name: Verify the database holds exactly this branch's migrations
+        id: verify
+        env:
+          CI_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
+          CI_DATABASE_HOST: ${{ vars.CI_DATABASE_HOST }}
+        run: node scripts/ci/reset-ci-database.mjs verify
+
       # The suites create their own login roles with this password. A new random one per run,
       # masked in the log, so there is no second secret to store or rotate.
       - name: Generate the throwaway role password
-        if: steps.gate.outputs.enabled == 'true'
         run: |
           pw="$(openssl rand -hex 24)"
           echo "::add-mask::$pw"
@@ -133,43 +157,43 @@ jobs:
 
       # One file per step, so a failure names the suite; each runs even if an earlier one failed.
       - name: Integration tests (database layer)
-        if: ${{ !cancelled() && steps.gate.outputs.enabled == 'true' }}
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
         env:
           TEST_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
         run: npx vitest run lib/db/integration.test.ts
 
       - name: Integration tests (authentication)
-        if: ${{ !cancelled() && steps.gate.outputs.enabled == 'true' }}
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
         env:
           TEST_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
         run: npx vitest run lib/auth/auth.integration.test.ts
 
       - name: Integration tests (authorization through the real routes)
-        if: ${{ !cancelled() && steps.gate.outputs.enabled == 'true' }}
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
         env:
           TEST_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
         run: npx vitest run lib/auth/authz.integration.test.ts
 
       - name: Integration tests (admin routes)
-        if: ${{ !cancelled() && steps.gate.outputs.enabled == 'true' }}
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
         env:
           TEST_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
         run: npx vitest run lib/auth/admin.integration.test.ts
 
       - name: Integration tests (client writes)
-        if: ${{ !cancelled() && steps.gate.outputs.enabled == 'true' }}
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
         env:
           TEST_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
         run: npx vitest run lib/auth/clients.integration.test.ts
 
       - name: Integration tests (report shell)
-        if: ${{ !cancelled() && steps.gate.outputs.enabled == 'true' }}
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
         env:
           TEST_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
         run: npx vitest run lib/auth/reports.integration.test.ts
 
       - name: Integration tests (section generation)
-        if: ${{ !cancelled() && steps.gate.outputs.enabled == 'true' }}
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
         env:
           TEST_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
         run: npx vitest run lib/auth/generation.integration.test.ts
