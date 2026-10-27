@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { fieldClass } from "@/components/auth/auth-card";
+import { GenerateSectionButton } from "@/components/reports/generate-section-button";
+import { TEST_TEXT_MARKER } from "@/lib/reports/generate-messages";
 
 type Version = { id: string; version: number; editType: string; text: string; createdAt: string };
 
@@ -16,6 +18,8 @@ export function SectionEditor({
   initialText,
   initialVersion,
   editable,
+  canGenerate,
+  isTestText,
 }: {
   reportId: string;
   sectionId: string;
@@ -23,6 +27,10 @@ export function SectionEditor({
   initialText: string;
   initialVersion: number;
   editable: boolean;
+  /** Decided on the server (lib/reports/generate-control.ts); the route re-checks it. */
+  canGenerate: boolean;
+  /** The current version is the test model's and nobody has edited it since. */
+  isTestText: boolean;
 }) {
   const router = useRouter();
   const [version, setVersion] = useState(initialVersion);
@@ -30,6 +38,7 @@ export function SectionEditor({
   const [saved, setSaved] = useState(false);
   const [pending, setPending] = useState(false);
   const [history, setHistory] = useState<Version[] | null>(null);
+  const [boxHasText, setBoxHasText] = useState(initialText.trim().length > 0);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -64,9 +73,10 @@ export function SectionEditor({
   return (
     <section className="flex flex-col gap-2 text-sm">
       <h2 className="text-base font-semibold">{title}</h2>
+      {isTestText ? <p>{TEST_TEXT_MARKER}</p> : null}
       {editable ? (
         <form onSubmit={onSubmit} className="flex flex-col gap-2">
-          <textarea name="text" defaultValue={initialText} rows={8} maxLength={20000} className={`${fieldClass} h-auto py-2`} aria-label={title} />
+          <textarea name="text" defaultValue={initialText} rows={8} maxLength={20000} className={`${fieldClass} h-auto py-2`} aria-label={title} onChange={(e) => setBoxHasText(e.target.value.trim().length > 0)} />
           <Button type="submit" disabled={pending}>
             Save section
           </Button>
@@ -74,6 +84,7 @@ export function SectionEditor({
       ) : (
         <p className="whitespace-pre-wrap">{initialText || "—"}</p>
       )}
+      {editable && canGenerate ? <GenerateSectionButton reportId={reportId} sectionId={sectionId} boxHasText={boxHasText} /> : null}
       {message ? <p role="alert">{message}</p> : null}
       {saved ? <p role="status">Saved as version {version}.</p> : null}
       <button type="button" className="text-left underline" onClick={showHistory}>

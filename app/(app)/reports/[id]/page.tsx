@@ -8,6 +8,8 @@ import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/guard";
 import { REPORT_WRITE_ROLES } from "@/lib/auth/permissions";
 import { getReportDetail } from "@/lib/db/report-access";
+import { canOfferGenerate, isTestModelText } from "@/lib/reports/generate-control";
+import { REPORT_ERROR_NOTE, REPORT_GENERATING_NOTE } from "@/lib/reports/generate-messages";
 import { isEditable } from "@/lib/reports/status";
 
 export const metadata: Metadata = { title: "Report", robots: { index: false } };
@@ -32,11 +34,23 @@ async function ReportDetail({ params }: { params: Promise<{ id: string }> }) {
         Status: <strong>{report.status}</strong>
         {report.finalizedAt ? ` (finalized ${new Date(report.finalizedAt).toLocaleString()})` : ""}
       </p>
+      {report.status === "generating" ? <p className="text-sm">{REPORT_GENERATING_NOTE}</p> : null}
+      {report.status === "error" && canWrite ? <p className="text-sm">{REPORT_ERROR_NOTE}</p> : null}
       <Link href={`/clients/${report.clientId}`} className="text-sm underline">
         Back to the client
       </Link>
       {report.sections.map((s) => (
-        <SectionEditor key={`${s.id}:${s.version}`} reportId={report.id} sectionId={s.id} title={s.title} initialText={s.text} initialVersion={s.version} editable={editable} />
+        <SectionEditor
+          key={`${s.id}:${s.version}`}
+          reportId={report.id}
+          sectionId={s.id}
+          title={s.title}
+          initialText={s.text}
+          initialVersion={s.version}
+          editable={editable}
+          canGenerate={canOfferGenerate({ canWrite, status: report.status, type: s.type, version: s.version })}
+          isTestText={isTestModelText(s.editType)}
+        />
       ))}
       {canWrite && report.status === "generated" ? <FinalizeButton reportId={report.id} /> : null}
     </>
