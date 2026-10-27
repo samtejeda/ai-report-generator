@@ -15,7 +15,7 @@
     "db:check": "drizzle-kit check"
   },
   "dependencies": {
-    "@ai-sdk/openai-compatible": "^3.0.71",
+    "@ai-sdk/openai-compatible": "^3.0.77",
     "@base-ui/react": "^1.9.0",
     "@neondatabase/serverless": "^1.2.0",
     "ai": "^7.0.152",
