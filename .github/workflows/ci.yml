@@ -99,7 +99,7 @@ jobs:
       # (Fork and Dependabot PRs never reach this step: the job condition above skips them.)
       - name: Require the CI database settings
         env:
-          CI_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
+          CI_DATABASE_URL: ${{ secrets.CI_DATABASE_URL_PROOF_MISSING }} # PROOF run 3: a secret that does not exist
           CI_DATABASE_HOST: ${{ vars.CI_DATABASE_HOST }}
         run: |
           missing=""
@@ -131,7 +131,7 @@ jobs:
       - name: Reset the CI database
         env:
           CI_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
-          CI_DATABASE_HOST: ep-wrong-host-000000.c-6.us-east-2.aws.neon.tech # PROOF run 2: deliberately wrong, the guard must refuse
+          CI_DATABASE_HOST: ${{ vars.CI_DATABASE_HOST }}
         run: node scripts/ci/reset-ci-database.mjs reset
 
       # drizzle.config.ts reads DATABASE_URL_UNPOOLED.
