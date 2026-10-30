@@ -719,6 +719,8 @@ describe.skipIf(!ENABLED)("report shell through the real stack", () => {
       await save(ownerA, one.reportId, one.sections[0].id, { text: "x", baseVersion: 0 });
       const many = await mkReport(orgA, c1.id, ownerA, "draft");
       for (const [i, sec] of many.sections.entries()) await save(i % 2 ? assocA : ownerA, many.reportId, sec.id, { text: `s${i}`, baseVersion: 0 });
+      // A section with two versions by two different people: its history must still cost one author lookup.
+      await save(assocA, many.reportId, many.sections[0].id, { text: "s0 again", baseVersion: 1 });
       const none = await mkReport(orgA, c1.id, ownerA, "draft");
 
       const detailOne = await statements(() => get(ownerA, one.reportId));
@@ -732,7 +734,10 @@ describe.skipIf(!ENABLED)("report shell through the real stack", () => {
       expect(detailNone.filter(isUsers)).toHaveLength(0);
 
       const historyMany = await statements(() => history(ownerA, many.reportId, many.sections[0].id));
+      const historyOne = await statements(() => history(ownerA, one.reportId, one.sections[0].id));
+      expect(((await history(ownerA, many.reportId, many.sections[0].id)).json.data as V[]).map((v) => v.authorName)).toEqual([nameOf(assocA), nameOf(ownerA)]);
       expect(historyMany.filter(isUsers)).toHaveLength(1);
+      expect(historyMany.length).toBe(historyOne.length);
       // Two different authors across the six sections, still one lookup for all of them.
       const authors = new Set((await h.owner.select().from(schema.reportVersions).where(eq(schema.reportVersions.reportId, many.reportId))).map((v) => v.createdByUserId));
       expect(authors).toEqual(new Set([ownerA.userId, assocA.userId]));
