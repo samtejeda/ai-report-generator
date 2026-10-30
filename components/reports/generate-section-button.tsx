@@ -13,6 +13,7 @@ import {
   GENERATE_RUNNING_LABEL,
   GENERATE_RUNNING_STATUS,
 } from "@/lib/reports/generate-messages";
+import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
 // "Generate test text" for one empty prose section. The server decides everything (role, status,
 // that the section is empty, the practice's endpoint, the limits); this only asks and reports.
@@ -25,6 +26,8 @@ export function GenerateSectionButton({ reportId, sectionId, boxHasText }: { rep
   const [message, setMessage] = useState<string | null>(null);
   const [refreshing, startRefresh] = useTransition();
   const busy = running || refreshing;
+  // Next keeps this page alive and hidden and restores it: do not come back to a stale error line.
+  useResetWhenHidden(() => setMessage(null));
 
   async function onClick() {
     setRunning(true);

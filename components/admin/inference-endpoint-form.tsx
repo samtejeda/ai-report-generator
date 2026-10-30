@@ -7,6 +7,7 @@ import { fieldClass } from "@/components/auth/auth-card";
 import { Button } from "@/components/ui/button";
 import { callAdminApi } from "@/lib/admin/api-call";
 import { adminErrorMessage, needsReauth } from "@/lib/admin/messages";
+import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
 // Owner only; the server checks the role, the allow-list (Tailscale hosts only) and that the
 // sign-in is recent. This form does not validate the address itself: the server's answer is the
@@ -18,6 +19,14 @@ export function InferenceEndpointForm({ current }: { current: string | null }) {
   const [saved, setSaved] = useState<string | null>(null);
   const [reauth, setReauth] = useState(false);
   const [pending, setPending] = useState(false);
+
+  // Next keeps this page alive and hidden and restores its state: do not come back to a stale "saved" line, error or re-sign-in prompt.
+  // The address in the box is kept.
+  useResetWhenHidden(() => {
+    setMessage(null);
+    setSaved(null);
+    setReauth(false);
+  });
 
   async function send(endpoint: string | null) {
     setPending(true);

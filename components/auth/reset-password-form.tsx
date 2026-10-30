@@ -5,13 +5,24 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth/client";
 import { PASSWORD_MIN_LENGTH } from "@/lib/auth/config";
-import { fieldClass } from "./auth-card";
+import { resetFormWhenHidden, useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
+import { PasswordField } from "./password-field";
 
 export function ResetPasswordForm({ token }: { token: string | null }) {
   const [invalidLink, setInvalidLink] = useState(!token);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [done, setDone] = useState(false);
+
+  // Next keeps this page alive and hidden and restores it. After a successful reset the link is spent,
+  // so the restored page says so instead of showing "done" or a form that can only fail.
+  useResetWhenHidden(() => {
+    setMessage(null);
+    if (done) {
+      setDone(false);
+      setInvalidLink(true);
+    }
+  });
 
   useEffect(() => {
     // Keep the token out of the address bar, history and screenshots once it is in memory.
@@ -60,15 +71,9 @@ export function ResetPasswordForm({ token }: { token: string | null }) {
   }
 
   return (
-    <form onSubmit={onSubmit} className="flex flex-col gap-3">
-      <label className="flex flex-col gap-1 text-sm">
-        New password
-        <input name="password" type="password" autoComplete="new-password" minLength={PASSWORD_MIN_LENGTH} required className={fieldClass} />
-      </label>
-      <label className="flex flex-col gap-1 text-sm">
-        Confirm new password
-        <input name="confirm" type="password" autoComplete="new-password" minLength={PASSWORD_MIN_LENGTH} required className={fieldClass} />
-      </label>
+    <form ref={resetFormWhenHidden} onSubmit={onSubmit} className="flex flex-col gap-3">
+      <PasswordField label="New password" name="password" autoComplete="new-password" minLength={PASSWORD_MIN_LENGTH} />
+      <PasswordField label="Confirm new password" name="confirm" autoComplete="new-password" minLength={PASSWORD_MIN_LENGTH} />
       {message ? (
         <p role="alert" className="text-sm text-red-700">
           {message}
