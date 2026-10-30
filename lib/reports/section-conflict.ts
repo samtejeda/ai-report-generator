@@ -2,7 +2,7 @@
 // that two people editing the same section at once do not overwrite each other. Sam expects that
 // to be rare and may delete it. To remove it, delete this file and its test,
 // components/reports/use-section-conflict.ts, components/reports/section-conflict-notice.tsx, and
-// the three blocks marked REMOVABLE in components/reports/section-editor.tsx; a refused save
+// the four blocks and two import lines marked REMOVABLE in components/reports/section-editor.tsx; a refused save
 // (409) would then show SAVE_FAILED. Nothing is lost by removing it: the server still refuses a
 // save made from an old version (lib/db/report-write.ts), so nothing is ever overwritten.
 //
@@ -83,18 +83,28 @@ export function decideAfterRefusal(read: CurrentRead, baseVersion: number): Refu
 }
 
 
-// ---- sentences (fixed text; nothing from the server's body is shown) ----
+// ---- the sentence, the buttons and the messages (fixed text; nothing from the server's body is shown) ----
+
+/**
+ * "<Name> saved this section at <time> while you were editing. Your changes are still here."
+ * Returned in two parts so the page can put its own local-time element between them. An unknown
+ * author is "Someone"; with no time the sentence has no "at <time>" and `after` is null.
+ */
+export function conflictSentence(theirs: Pick<CurrentSection, "authorName" | "editedAt">): { before: string; after: string | null } {
+  const name = theirs.authorName?.trim() || "Someone";
+  const tail = " while you were editing. Your changes are still here.";
+  return theirs.editedAt ? { before: `${name} saved this section at `, after: tail } : { before: `${name} saved this section${tail}`, after: null };
+}
+
+export const SEE_THEIRS_BUTTON = "See their version";
+export const HIDE_THEIRS_BUTTON = "Hide their version";
+export const SAVE_MINE_BUTTON = "Save mine as the newest version";
+export const USE_THEIRS_BUTTON = "Use theirs instead";
+export const USE_THEIRS_NOTE = "Use theirs instead replaces the box with their text and drops yours.";
+export const TOOK_THEIRS_NOTE = "Showing their version. Your changes were dropped.";
+export const CONFLICT_AGAIN = "It changed again while you were deciding. The saved text is now the newest one.";
+
 export const SAVE_UNCHANGED = "This could not be saved just now, and nobody else has changed the section. Your text is still in the box. Try again.";
 export const SAVE_CLOSED = "This report can no longer be changed (it was finalized, or a test generation is running). Your text is still in the box; copy it if you need it.";
 export const SAVE_GONE = "This section is no longer part of the report. Your text is still in the box; copy it if you need it.";
 export const SAVE_UNREADABLE = "Someone else saved this section, but their text could not be loaded. Your text is still in the box. Press Save to try again.";
-export const CONFLICT_HEADING = "Someone saved this section after you opened it.";
-export const CONFLICT_EXPLAIN = "Nothing has been overwritten. Choose what happens to your text.";
-export const CONFLICT_AGAIN = "It changed again while you were deciding. This is the newest text now.";
-export const CONFLICT_MINE_LABEL = "Your text (not saved)";
-export const CONFLICT_THEIRS_LABEL = "The saved text";
-export const KEEP_MINE_BUTTON = "Keep mine as the next version";
-export const TAKE_THEIRS_BUTTON = "Take theirs and discard mine";
-export const CANCEL_BUTTON = "Cancel";
-export const TOOK_THEIRS_NOTE = "Showing the saved text. Your earlier text was discarded.";
-export const CANCELLED_NOTE = "Not saved. Your text is still in the box; saving it will ask again.";

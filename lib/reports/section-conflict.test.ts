@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { decideAfterRefusal, readCurrentSection, type CurrentRead } from "./section-conflict";
+import { conflictSentence, decideAfterRefusal, readCurrentSection, SAVE_MINE_BUTTON, SEE_THEIRS_BUTTON, type CurrentRead, USE_THEIRS_BUTTON } from "./section-conflict";
 
 const REPORT = "11111111-1111-4111-8111-111111111111";
 const SECTION = "22222222-2222-4222-8222-222222222222";
@@ -93,5 +93,38 @@ describe("decideAfterRefusal", () => {
   it("a section that is gone, and a read that failed", () => {
     expect(decideAfterRefusal(read("draft", null), 3).kind).toBe("gone");
     expect(decideAfterRefusal({ ok: false }, 3).kind).toBe("unreadable");
+  });
+});
+
+describe("conflictSentence", () => {
+  const AT = "2026-10-30T19:14:00.000Z";
+  it("names the author and leaves a place for the time", () => {
+    expect(conflictSentence({ authorName: "Dana Reyes", editedAt: AT })).toEqual({
+      before: "Dana Reyes saved this section at ",
+      after: " while you were editing. Your changes are still here.",
+    });
+  });
+  it("an unknown author is 'Someone'", () => {
+    expect(conflictSentence({ authorName: null, editedAt: AT }).before).toBe("Someone saved this section at ");
+    expect(conflictSentence({ authorName: "   ", editedAt: AT }).before).toBe("Someone saved this section at ");
+  });
+  it("with no time there is no 'at <time>' and no second part", () => {
+    expect(conflictSentence({ authorName: "Dana", editedAt: null })).toEqual({
+      before: "Dana saved this section while you were editing. Your changes are still here.",
+      after: null,
+    });
+    expect(conflictSentence({ authorName: null, editedAt: null }).before).toBe("Someone saved this section while you were editing. Your changes are still here.");
+  });
+  it("reads as one sentence once the time is put between the parts", () => {
+    const { before, after } = conflictSentence({ authorName: "Dana", editedAt: AT });
+    expect(`${before}3:14 PM${after}`).toBe("Dana saved this section at 3:14 PM while you were editing. Your changes are still here.");
+  });
+});
+
+describe("the labels are the ones Sam chose", () => {
+  it("buttons and toggle", () => {
+    expect(SAVE_MINE_BUTTON).toBe("Save mine as the newest version");
+    expect(USE_THEIRS_BUTTON).toBe("Use theirs instead");
+    expect(SEE_THEIRS_BUTTON).toBe("See their version");
   });
 });
