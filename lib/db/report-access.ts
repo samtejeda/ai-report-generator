@@ -80,7 +80,7 @@ export function reportVisibilityFilter(session: SessionContext): SQL | null {
 }
 
 /** "The highest version of its section", for a find on report_versions. One query for all sections. */
-const isCurrentVersion = sql`${reportVersions.versionNumber} = (
+export const isCurrentVersion = sql`${reportVersions.versionNumber} = (
   select max(v2.version_number) from report_versions v2
   where v2.organization_id = ${reportVersions.organizationId} and v2.section_id = ${reportVersions.sectionId}
 )`;

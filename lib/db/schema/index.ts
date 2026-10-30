@@ -10,5 +10,6 @@ export * from "./templates";
 export * from "./reports";
 export * from "./rag";
 export * from "./audit-log";
+export * from "./read-limit-counters";
 export * from "./jobs";
 export * from "./auth";

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getTableName, eq, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/neon-serverless";
+import { PgDialect } from "drizzle-orm/pg-core";
 import * as schema from "./schema";
 import {
   DERIVED_DELETABLE_TABLES,
@@ -198,5 +199,59 @@ describe("tenantDb.lock", () => {
     });
     // set_config for the tenant, then the lock; the name and org are bound parameters, not spliced text.
     expect(calls).toHaveLength(2);
+  });
+});
+
+describe("tenantDb.countRead", () => {
+  const USER = "22222222-2222-4222-8222-222222222222";
+  const fakeDb = (calls: unknown[]) =>
+    ({
+      transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+        fn({ execute: async (q: unknown) => (calls.push(q), { rows: [{ count: 2, seconds_left: 12.2 }] }) }),
+    }) as never;
+
+  it("is refused outside a transaction", async () => {
+    await expect(t.countRead(USER, "report_state", 120)).rejects.toThrow(/needs a transaction/);
+  });
+
+  it("is one upsert with the organization, person, key and limit as bound parameters, and rounds the wait up", async () => {
+    const calls: unknown[] = [];
+    const out = await tenantDb({ organizationId: ORG }, fakeDb(calls)).transaction((inner) => inner.countRead(USER, "report_state", 120));
+    expect(out).toEqual({ count: 2, secondsLeft: 13 });
+    expect(calls).toHaveLength(2); // set_config for the tenant, then the one upsert
+    const q = new PgDialect().sqlToQuery(calls[1] as never);
+    expect(q.sql).toContain("insert into read_limit_counters as c (organization_id, user_id, key, window_start, count)");
+    expect(q.sql).toContain("on conflict (organization_id, user_id, key) do update");
+    expect(q.sql).toContain("date_trunc('minute', now())");
+    expect(q.sql).toContain("least(c.count + 1,");
+    expect(q.params).toEqual(expect.arrayContaining([ORG, USER, "report_state", 121]));
+    expect(q.sql).not.toContain(USER);
+    expect(q.sql).not.toContain(ORG);
+  });
+
+  it("refuses a bad user id, a key off the list and a silly limit before sending anything", async () => {
+    const calls: unknown[] = [];
+    await tenantDb({ organizationId: ORG }, fakeDb(calls)).transaction(async (inner) => {
+      await expect(inner.countRead("nope", "report_state", 120)).rejects.toThrow(/UUID/);
+      await expect(inner.countRead(USER, "other" as never, 120)).rejects.toThrow(/unknown read limit key/);
+      for (const bad of [0, -1, 1.5, 1_000_000]) await expect(inner.countRead(USER, "report_state", bad), String(bad)).rejects.toThrow(/limit must be/);
+    });
+    expect(calls).toHaveLength(1); // only the tenant binding
+  });
+});
+
+describe("tenantDb.find columns", () => {
+  it("reads only the named columns, still scoped to the practice, and never the others", () => {
+    const q = t.find(schema.reportVersions, { columns: ["sectionId", "versionNumber"], limit: 5 }).toSQL();
+    expect(q.sql).toContain('select "section_id", "version_number" from "report_versions"');
+    expect(q.sql).toContain('"report_versions"."organization_id" = $1');
+    expect(q.sql).not.toContain('"content"');
+    expect(t.find(schema.reportVersions, { limit: 5 }).toSQL().sql).toContain('"content"');
+  });
+
+  it("refuses an empty list and a name that is not a column", () => {
+    expect(() => t.find(schema.reportVersions, { columns: [], limit: 5 })).toThrow(/must not be empty/);
+    expect(() => t.find(schema.reportVersions, { columns: ["nope" as never], limit: 5 })).toThrow(/unknown column/);
+    expect(() => t.find(schema.reportVersions, { columns: ["toString" as never], limit: 5 })).toThrow(/unknown column/);
   });
 });
