@@ -1,3 +1,8 @@
+// REMOVABLE (Sam, PROGRESS.md decision 15): the only limit constant for the "someone changed this
+// section" check (GET /api/reports/{id}/state). Delete it with that route and lib/db/report-state.ts;
+// lib/reports/state.test.ts reads it and goes too. If the counter table is kept for another limited
+// read, give that read its own constant and key instead of reusing this one.
+
 /**
  * The one number behind the "someone changed this section" check's limit (GET /api/reports/{id}/state).
  * A person's open editor asks about once a minute; this is a coarse ceiling against a loop or abuse,

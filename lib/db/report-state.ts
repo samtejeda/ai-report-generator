@@ -1,3 +1,10 @@
+// REMOVABLE (Sam, PROGRESS.md decision 15): this is the data function for GET /api/reports/{id}/state,
+// the "someone changed this section" check, and nothing else uses it. Delete it with the route
+// (app/api/reports/[id]/state/route.ts), lib/reports/state-limits.ts and the state tests listed at the
+// top of the route. If it goes, `authorNames` and `isCurrentVersion` in lib/db/report-access.ts are
+// still used by the full report reads and stay. The `columns` option of tenantDb.find was added for
+// this file; it is harmless to keep and can stay or go with it.
+
 import { and, asc, eq } from "drizzle-orm";
 import type { SessionContext } from "@/lib/auth/session";
 import { STATE_READS_PER_MINUTE } from "@/lib/reports/state-limits";

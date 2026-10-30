@@ -1,3 +1,11 @@
+// REMOVABLE (Sam, PROGRESS.md decision 15): the "someone changed this section" check may be dropped or
+// reduced to on-focus and before-save if it proves a burden on the server. This route exists only for
+// that check. Removing it means deleting, together: this route; lib/db/report-state.ts;
+// lib/reports/state-limits.ts; lib/reports/state.test.ts and lib/auth/state.integration.test.ts; its
+// entries in lib/api-inventory.test.ts and lib/auth/guard-coverage.test.ts; the API.md row; the CI
+// step "Integration tests (report state check)" and the RUNBOOK suite count. The counter below it
+// (tenantDb.countRead and the read_limit_counters table) is removed separately; see the REMOVABLE
+// notes there. Nothing else in the app calls this route.
 import { z } from "zod";
 import { jsonError, jsonOk } from "@/lib/api/respond";
 import { guardedRoute } from "@/lib/auth/guard";

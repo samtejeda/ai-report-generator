@@ -271,6 +271,11 @@ export function tenantDb(ctx: TenantContext, db: Db = getDb()) {
         await exec.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`${orgId}:${name}`}, 0))`);
       },
 
+      // REMOVABLE (Sam, PROGRESS.md decision 15): this method exists only for the per-person limit on
+      // GET /api/reports/{id}/state and has no other caller. If that check is removed, delete it with the
+      // read_limit_counters table (a NEW migration drops the table; see the REMOVABLE note in
+      // lib/db/schema/read-limit-counters.ts), COUNTER_TABLES above, and the countRead tests in
+      // lib/db/tenant.test.ts. If another limited read is added first, keep it and add a key instead.
       /**
        * Counts one call by one person against a per-minute limit and says where they stand. One
        * atomic statement (insert, or add one in the same minute, or restart at one in a new

@@ -1,3 +1,12 @@
+// REMOVABLE (Sam, PROGRESS.md decision 15): this table exists only to count calls to
+// GET /api/reports/{id}/state per person without writing an audit row. If the check is removed, this
+// file goes too, but dropping the table needs a NEW forward-only migration (`drop table
+// read_limit_counters`, after confirming nothing else uses it); never edit or delete migration
+// 0014_read_limit_counters.sql, which has already been applied. Remove with it: the export in
+// lib/db/schema/index.ts, COUNTER_TABLES and countRead() in lib/db/tenant.ts (and its tests in
+// lib/db/tenant.test.ts), the table's entries in lib/db/schema.test.ts and the "per-person read
+// counter" block and fixture row in lib/db/integration.test.ts, and the CLAUDE.md data-model bullet.
+// The `report_state` key is the only one in READ_LIMIT_KEYS today.
 import { sql } from "drizzle-orm";
 import { check, foreignKey, integer, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { createdAt, organizationId, pk, updatedAt } from "./_shared";
