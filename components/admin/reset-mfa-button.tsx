@@ -6,6 +6,7 @@ import { SignOutButton } from "@/components/auth/sign-out-button";
 import { Button } from "@/components/ui/button";
 import { callAdminApi } from "@/lib/admin/api-call";
 import { adminErrorMessage, needsReauth } from "@/lib/admin/messages";
+import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
 // Owner only, for an associate or admin who lost their phone and backup codes. The route needs a
 // sign-in from the last few minutes; if it is older we say so and offer sign-out (there is no
@@ -17,6 +18,13 @@ export function ResetMfaButton({ userId, name, enrolled }: { userId: string; nam
   const [done, setDone] = useState(false);
   const [reauth, setReauth] = useState(false);
   const [pending, setPending] = useState(false);
+
+  // Next keeps this page alive and hidden and restores its state: do not come back to a stale "Authenticator reset" line, error or re-sign-in prompt.
+  useResetWhenHidden(() => {
+    setMessage(null);
+    setDone(false);
+    setReauth(false);
+  });
 
   async function onClick() {
     if (!window.confirm("Reset this person's authenticator? They are signed out everywhere and must set up a new phone at their next sign-in. Their password does not change.")) return;

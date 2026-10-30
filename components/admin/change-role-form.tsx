@@ -5,6 +5,7 @@ import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { callAdminApi } from "@/lib/admin/api-call";
 import { adminErrorMessage } from "@/lib/admin/messages";
+import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
 // Shown only where the server's own rule would allow a role change (lib/admin/user-actions.ts);
 // the route checks again and is the gate. The new role applies on the person's next request.
@@ -14,6 +15,10 @@ export function ChangeRoleForm({ userId, name, currentRole, roles }: { userId: s
   const [message, setMessage] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [pending, setPending] = useState(false);
+  useResetWhenHidden(() => {
+    setMessage(null);
+    setDone(false);
+  });
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

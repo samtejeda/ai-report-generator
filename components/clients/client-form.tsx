@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { fieldClass } from "@/components/auth/auth-card";
+import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
 // Plain create/edit form for the four client fields (decision D6). It only calls our own routes;
 // the server validates and authorizes everything again, so nothing here is a gate.
@@ -17,9 +18,17 @@ export function ClientForm({ clientId, initial = EMPTY }: { clientId?: string; i
   const [saved, setSaved] = useState(false);
   const [pending, setPending] = useState(false);
 
+  // Next keeps this page alive and hidden and restores its state: do not come back to a stale "Saved." or error line.
+  // Only the messages are reset; what the person typed is a draft and stays.
+  useResetWhenHidden(() => {
+    setMessage(null);
+    setSaved(false);
+  });
+
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     const values: ClientFormValues = {
       displayName: String(form.get("displayName") ?? ""),
       dateOfBirth: String(form.get("dateOfBirth") ?? ""),
@@ -51,6 +60,9 @@ export function ClientForm({ clientId, initial = EMPTY }: { clientId?: string; i
     if (res.ok) {
       if (!clientId) {
         const created = (await res.json()) as { data: { id: string } };
+        // The page stays alive and hidden after this push; empty it so coming back to "New client"
+        // does not show the client that was just created.
+        formElement.reset();
         return router.push(`/clients/${created.data.id}`);
       }
       setSaved(true);

@@ -4,7 +4,10 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth/client";
+import { HOME_PATH } from "@/lib/auth/landing";
+import { resetFormWhenHidden, useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 import { fieldClass } from "./auth-card";
+import { PasswordField } from "./password-field";
 
 // Three steps: confirm the password, add the key to an authenticator app and type the first code,
 // then save the backup codes (shown once, here, and never again).
@@ -25,6 +28,16 @@ export function MfaSetup() {
   const [message, setMessage] = useState<string | null>(null);
   const [setupKey, setSetupKey] = useState("");
   const [backupCodes, setBackupCodes] = useState<string[]>([]);
+
+  // Next keeps this page alive and hidden and restores its state AND its DOM. The setup key and the
+  // backup codes are secrets: they must not sit in a hidden page, so leaving the page drops them
+  // and the setup starts again from the password.
+  useResetWhenHidden(() => {
+    setStep("password");
+    setMessage(null);
+    setSetupKey("");
+    setBackupCodes([]);
+  });
 
   async function onPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -58,12 +71,9 @@ export function MfaSetup() {
 
   if (step === "password") {
     return (
-      <form onSubmit={onPassword} className="flex flex-col gap-3">
+      <form ref={resetFormWhenHidden} onSubmit={onPassword} className="flex flex-col gap-3">
         <p className="text-sm">Two-step sign-in is required. You will need an authenticator app on your phone. Confirm your password to begin.</p>
-        <label className="flex flex-col gap-1 text-sm">
-          Password
-          <input name="password" type="password" autoComplete="current-password" required className={fieldClass} />
-        </label>
+        <PasswordField label="Password" name="password" autoComplete="current-password" />
         {message ? (
           <p role="alert" className="text-sm text-red-700">
             {message}
@@ -78,7 +88,7 @@ export function MfaSetup() {
 
   if (step === "code") {
     return (
-      <form onSubmit={onCode} className="flex flex-col gap-3">
+      <form ref={resetFormWhenHidden} onSubmit={onCode} className="flex flex-col gap-3">
         <p className="text-sm">
           In your authenticator app, add an account and enter this setup key. Choose &quot;time-based&quot; if asked. Then type the 6-digit code the app shows.
         </p>
@@ -115,7 +125,7 @@ export function MfaSetup() {
         onClick={() => {
           // Drop the codes from the page before leaving.
           setBackupCodes([]);
-          router.replace("/account");
+          router.replace(HOME_PATH);
           router.refresh();
         }}
       >

@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { callAdminApi } from "@/lib/admin/api-call";
 import { adminErrorMessage } from "@/lib/admin/messages";
+import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
 // Owner only. Ends one assignment (the row stays, marked ended); the person loses that client on
 // their next request. `description` is only the accessible name, e.g. "Alex Doe, Sam Client".
@@ -12,6 +13,7 @@ export function EndAssignmentButton({ assignmentId, description }: { assignmentI
   const router = useRouter();
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  useResetWhenHidden(() => setMessage(null));
 
   async function onClick() {
     if (!window.confirm("End this assignment? The person loses access to this client on their next request.")) return;

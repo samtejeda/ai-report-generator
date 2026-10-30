@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { AuthCard } from "@/components/auth/auth-card";
+import { BackupCodes } from "@/components/auth/backup-codes";
 import { ChangePasswordForm } from "@/components/auth/change-password-form";
 import { SignOutButton } from "@/components/auth/sign-out-button";
 import { requireSession } from "@/lib/auth/server";
@@ -15,6 +16,7 @@ async function AccountDetails() {
     <>
       <p className="text-sm">You are signed in as {role}.</p>
       <ChangePasswordForm />
+      <BackupCodes />
       <SignOutButton />
     </>
   );

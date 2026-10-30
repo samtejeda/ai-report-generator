@@ -96,6 +96,19 @@ describe("pages", () => {
     }
   });
 
+  it("the sign-in pages and / send a signed-in person home on the server, in the page, and read no tenant data", () => {
+    // proxy.ts stays a cookie-presence check; the decision is lib/auth/landing.ts, the lookup lib/auth/visitor.ts.
+    expect(read("app/page.tsx")).toMatch(/currentVisitor\(/);
+    expect(read("app/page.tsx")).toMatch(/rootRedirect\(/);
+    for (const file of ["app/login/page.tsx", "app/forgot-password/page.tsx"]) expect(read(file), file).toMatch(/SignedOutOnly/);
+    expect(read("components/auth/signed-out-only.tsx")).toMatch(/leaveIfSignedIn\(/);
+    expect(read("app/reset-password/page.tsx")).toMatch(/leaveIfSignedIn\(\{\s*resetLink:/);
+    for (const file of ["lib/auth/visitor.ts", "lib/auth/landing.ts", "components/auth/signed-out-only.tsx"]) {
+      expect(read(file), file).not.toMatch(/tenantDb|client-access|@\/lib\/db/);
+    }
+    expect(read("proxy.ts")).not.toMatch(/lib\/auth\/(visitor|landing|server)|getSessionOrNull/);
+  });
+
   it("every public-list entry still exists (no stale entries that quietly widen the surface)", () => {
     const routePaths = new Set(routes.map(urlPath));
     const pagePaths = new Set(pages.map(urlPath));

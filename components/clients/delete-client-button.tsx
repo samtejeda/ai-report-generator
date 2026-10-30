@@ -3,12 +3,14 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
 // Owner only (the server refuses anyone else). Soft delete: the client disappears for everyone.
 export function DeleteClientButton({ clientId }: { clientId: string }) {
   const router = useRouter();
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  useResetWhenHidden(() => setMessage(null));
 
   async function onClick() {
     if (!window.confirm("Delete this client? It will disappear for everyone in the practice.")) return;

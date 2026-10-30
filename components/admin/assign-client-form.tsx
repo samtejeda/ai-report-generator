@@ -6,6 +6,7 @@ import { fieldClass } from "@/components/auth/auth-card";
 import { Button } from "@/components/ui/button";
 import { callAdminApi } from "@/lib/admin/api-call";
 import { adminErrorMessage } from "@/lib/admin/messages";
+import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
 export type Option = { id: string; label: string };
 
@@ -19,6 +20,10 @@ export function AssignClientForm({ people, clients }: { people: Option[]; client
   const [message, setMessage] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [pending, setPending] = useState(false);
+  useResetWhenHidden(() => {
+    setMessage(null);
+    setDone(false);
+  });
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
