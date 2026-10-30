@@ -1,7 +1,7 @@
 import { expect, vi } from "vitest";
 import { createHmac } from "node:crypto";
 import { sql } from "drizzle-orm";
-import { Pool } from "@neondatabase/serverless";
+import { Client, Pool } from "@neondatabase/serverless";
 import { drizzle, type NeonDatabase } from "drizzle-orm/neon-serverless";
 import * as schema from "@/lib/db/schema";
 
@@ -148,9 +148,30 @@ export async function startHarness(options: { appRole: string; authRole: string;
     await owner.execute(sql`update auth_sessions set created_at = now() - make_interval(secs => ${secondsAgo}) where user_id = ${p.userId}`);
   }
 
+  /**
+   * The SQL text of every statement sent to the database while `run` executes (the app's own
+   * pool and this one share the driver), so a test can count queries, e.g. to prove there is no
+   * N+1. Text only; parameters are not recorded.
+   */
+  async function statementsOf(run: () => Promise<unknown>): Promise<string[]> {
+    const sent: string[] = [];
+    const original = Client.prototype.query;
+    const spy = vi.spyOn(Client.prototype, "query").mockImplementation(function (this: unknown, ...args: unknown[]) {
+      const first = args[0] as string | { text?: string };
+      sent.push(typeof first === "string" ? first : (first.text ?? ""));
+      return (original as (...a: unknown[]) => unknown).apply(this, args);
+    } as never);
+    try {
+      await run();
+    } finally {
+      spy.mockRestore();
+    }
+    return sent;
+  }
+
   async function stop() {
     await ownerPool.end();
   }
 
-  return { owner, handle, authCall, cookieFrom, seedOrg, seedUser, enroll, makePerson, call, seen, signedInAgo, stop };
+  return { owner, handle, authCall, cookieFrom, seedOrg, seedUser, enroll, makePerson, call, seen, signedInAgo, statementsOf, stop };
 }

@@ -1,12 +1,12 @@
-import { and, asc, desc, eq, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { SessionContext } from "@/lib/auth/session";
 import { parseProseContent } from "@/lib/reports/content";
 import { parseTemplateStructure } from "@/lib/reports/structure";
 import { z } from "zod";
 import { visibilityFilter, clampPage } from "./client-access";
-import { clients, reports, reportSections, reportTemplates, reportVersions } from "./schema";
+import { clients, reports, reportSections, reportTemplates, reportVersions, users } from "./schema";
 import { REPORT_STATUSES } from "./schema/reports";
-import { tenantDb } from "./tenant";
+import { MAX_PAGE_SIZE as TENANT_MAX_ROWS, tenantDb, type TenantDb } from "./tenant";
 
 /**
  * Who may see which report, and what a report looks like on the way out. A report is visible
@@ -38,11 +38,21 @@ export type SectionView = {
   version: number;
   editType: VersionRow["editType"] | null;
   editedAt: string | null;
+  /** Display name of whoever wrote the current version; null when nobody has, or the model did. Never an id or an email. */
+  authorName: string | null;
 };
 
 export type ReportDetail = ReportView & { templateSlug: string; sections: SectionView[] };
 
-export type VersionView = { id: string; version: number; editType: VersionRow["editType"]; text: string; createdAt: string };
+export type VersionView = {
+  id: string;
+  version: number;
+  editType: VersionRow["editType"];
+  text: string;
+  createdAt: string;
+  /** Display name of the author; null for model-generated text (no author id). Never an id or an email. */
+  authorName: string | null;
+};
 
 export const toReportView = (r: ReportRow): ReportView => ({
   id: r.id,
@@ -74,6 +84,20 @@ const isCurrentVersion = sql`${reportVersions.versionNumber} = (
   select max(v2.version_number) from report_versions v2
   where v2.organization_id = ${reportVersions.organizationId} and v2.section_id = ${reportVersions.sectionId}
 )`;
+
+/**
+ * Display names for the authors of versions that were ALREADY read under the visibility rule:
+ * one query for all of them, inside the caller's transaction, through tenantDb (so the practice
+ * filter is in the statement and row-level security sits underneath). The ids are never request
+ * input. A deactivated (soft-deleted) person keeps their name, so soft-deleted rows are included.
+ * Only `displayName` is copied out: no email, no id, no role ever reaches a view.
+ */
+export async function authorNames(t: Pick<TenantDb, "find">, versions: { createdByUserId: string | null }[]): Promise<Map<string, string>> {
+  const ids = [...new Set(versions.flatMap((v) => (v.createdByUserId ? [v.createdByUserId] : [])))];
+  if (ids.length === 0) return new Map();
+  const rows = await t.find(users, { where: inArray(users.id, ids), includeDeleted: true, limit: TENANT_MAX_ROWS });
+  return new Map(rows.map((u) => [u.id, u.displayName]));
+}
 
 export type ListFilter = { clientId?: string; status?: (typeof REPORT_STATUSES)[number]; limit?: number; offset?: number };
 
@@ -107,6 +131,7 @@ export async function getReportDetail(session: SessionContext, id: string, db?: 
     const titles = new Map(structure?.sections.map((s) => [s.key, s.title]) ?? []);
     const sections = await t.find(reportSections, { where: eq(reportSections.reportId, id), orderBy: asc(reportSections.position), limit: 200 });
     const current = await t.find(reportVersions, { where: and(eq(reportVersions.reportId, id), isCurrentVersion), limit: 200 });
+    const names = await authorNames(t, current);
     const bySection = new Map(current.map((v) => [v.sectionId, v]));
     return {
       ...toReportView(report),
@@ -124,6 +149,7 @@ export async function getReportDetail(session: SessionContext, id: string, db?: 
           version: v?.versionNumber ?? 0,
           editType: v?.editType ?? null,
           editedAt: v ? v.createdAt.toISOString() : null,
+          authorName: (v?.createdByUserId && names.get(v.createdByUserId)) || null,
         };
       }),
     };
@@ -153,12 +179,14 @@ export async function listSectionVersions(
       limit,
       offset,
     });
-    return rows.map((v) => ({
+    const names = await authorNames(t, rows);
+    return rows.map((v): VersionView => ({
       id: v.id,
       version: v.versionNumber,
       editType: v.editType,
       text: parseProseContent(v.content)?.text ?? "",
       createdAt: v.createdAt.toISOString(),
+      authorName: (v.createdByUserId && names.get(v.createdByUserId)) || null,
     }));
   });
 }

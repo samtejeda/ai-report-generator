@@ -63,7 +63,8 @@ describe.skipIf(!ENABLED)("report shell through the real stack", () => {
   const auditRows = (orgId: string, action: string) => h.owner.select().from(schema.auditLog).where(and(eq(schema.auditLog.organizationId, orgId), eq(schema.auditLog.action, action)));
 
   const REPORT_KEYS = ["clientId", "createdAt", "finalizedAt", "id", "status", "updatedAt"];
-  const SECTION_KEYS = ["editType", "editedAt", "id", "key", "position", "text", "title", "type", "version"];
+  const SECTION_KEYS = ["authorName", "editType", "editedAt", "id", "key", "position", "text", "title", "type", "version"];
+  const VERSION_KEYS = ["authorName", "createdAt", "editType", "id", "text", "version"];
 
   beforeAll(async () => {
     h = await startHarness({ appRole: "app_runtime_reports", authRole: "auth_runtime_reports", secret: "reports-test-secret-".padEnd(48, "x") });
@@ -359,7 +360,7 @@ describe.skipIf(!ENABLED)("report shell through the real stack", () => {
       expect(data.sections.map((s) => s.title)).toEqual(TEMPLATE_STRUCTURE.sections.map((s) => s.title));
       for (const s of data.sections) {
         expect(Object.keys(s).sort()).toEqual(SECTION_KEYS);
-        expect(s).toMatchObject({ text: "", version: 0, editType: null, editedAt: null });
+        expect(s).toMatchObject({ text: "", version: 0, editType: null, editedAt: null, authorName: null });
       }
       for (const secret of [orgA, tplA.promptId, tplA.templateId, ownerA.userId]) expect(res.text).not.toContain(secret);
       const viewed = (await auditRows(orgA, "report.viewed")).filter((a) => a.resourceId === r.reportId);
@@ -582,6 +583,166 @@ describe.skipIf(!ENABLED)("report shell through the real stack", () => {
       expect((await h.owner.select().from(schema.reports).where(eq(schema.reports.organizationId, orgA))).length).toBe(before);
       expect((await reportRow(r.reportId)).status).toBe("generated");
       expect(await versionRows(r.sections[0].id)).toHaveLength(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------------------
+  describe("who changed a section", () => {
+    const nameOf = (p: Person) => `Synthetic ${p.label}`;
+    type V = { id: string; version: number; editType: string; text: string; createdAt: string; authorName: string | null };
+    type D = { sections: { id: string; version: number; editType: string | null; editedAt: string | null; authorName: string | null }[] };
+    const hist = async (who: Person, reportId: string, sectionId: string) => (await history(who, reportId, sectionId)).json.data as V[];
+    const sectionOf = async (who: Person, reportId: string, sectionId: string) => ((await get(who, reportId)).json.data as D).sections.find((x) => x.id === sectionId)!;
+    /** A model-written first version, inserted as the generation code does (no author id). */
+    const modelText = (orgId: string, reportId: string, sectionId: string) =>
+      h.owner.insert(schema.reportVersions).values({ organizationId: orgId, reportId, sectionId, versionNumber: 1, editType: "ai_generated", content: { text: "model words" }, createdByUserId: null });
+
+    it("the history and the detail name the person who wrote each version, and the time is the version's", async () => {
+      const r = await mkReport(orgA, c1.id, ownerA, "draft");
+      const sid = r.sections[0].id;
+      await save(ownerA, r.reportId, sid, { text: "one", baseVersion: 0 });
+      await save(assocA, r.reportId, sid, { text: "two", baseVersion: 1 });
+      for (const who of [ownerA, assocA, adminA]) {
+        const list = await hist(who, r.reportId, sid);
+        expect(list.map((v) => [v.version, v.authorName]), who.label).toEqual([[2, nameOf(assocA)], [1, nameOf(ownerA)]]);
+        for (const v of list) expect(Object.keys(v).sort()).toEqual(VERSION_KEYS);
+        const cur = await sectionOf(who, r.reportId, sid);
+        expect(cur).toMatchObject({ version: 2, authorName: nameOf(assocA), editedAt: list[0].createdAt });
+        // A section nobody has written has no author.
+        expect(await sectionOf(who, r.reportId, r.sections[1].id)).toMatchObject({ version: 0, authorName: null, editedAt: null });
+      }
+    });
+
+    it("model-written text has no author (null), and a person's edit on top of it has theirs", async () => {
+      const r = await mkReport(orgA, c1.id, ownerA, "draft");
+      const sid = r.sections[0].id;
+      await modelText(orgA, r.reportId, sid);
+      expect(await hist(ownerA, r.reportId, sid)).toMatchObject([{ version: 1, editType: "ai_generated", authorName: null }]);
+      expect(await sectionOf(ownerA, r.reportId, sid)).toMatchObject({ version: 1, editType: "ai_generated", authorName: null });
+      await save(assocA, r.reportId, sid, { text: "edited", baseVersion: 1 });
+      expect((await hist(ownerA, r.reportId, sid)).map((v) => [v.version, v.editType, v.authorName])).toEqual([[2, "human_edit", nameOf(assocA)], [1, "ai_generated", null]]);
+      expect(await sectionOf(ownerA, r.reportId, sid)).toMatchObject({ editType: "human_edit", authorName: nameOf(assocA) });
+    });
+
+    it("a deactivated person still shows their name", async () => {
+      const gone = await h.makePerson(orgA, `assoc-gone-${tag()}`, "associate");
+      await assign(c1.id, gone, ownerA);
+      const r = await mkReport(orgA, c1.id, ownerA, "draft");
+      const sid = r.sections[0].id;
+      expect((await save(gone, r.reportId, sid, { text: "before leaving", baseVersion: 0 })).status).toBe(200);
+      await h.owner.update(schema.users).set({ deletedAt: new Date() }).where(eq(schema.users.id, gone.userId));
+      expect((await hist(ownerA, r.reportId, sid))[0].authorName).toBe(nameOf(gone));
+      expect((await sectionOf(ownerA, r.reportId, sid)).authorName).toBe(nameOf(gone));
+    });
+
+    it("another practice's user never appears; the data layer cannot even store such an author", async () => {
+      const clientB = await seedClient(orgB, `Report Client B ${tag()}`);
+      await assign(clientB.id, assocB, ownerB);
+      const b = await mkReport(orgB, clientB.id, ownerB, "draft");
+      expect((await save(assocB, b.reportId, b.sections[0].id, { text: "from practice B", baseVersion: 0 })).status).toBe(200);
+      expect((await hist(ownerB, b.reportId, b.sections[0].id))[0].authorName).toBe(nameOf(assocB));
+
+      // A report in practice A, authored by A's people, read by every A role.
+      const a = await mkReport(orgA, c1.id, ownerA, "draft");
+      await save(ownerA, a.reportId, a.sections[0].id, { text: "from A", baseVersion: 0 });
+      for (const who of [ownerA, assocA, adminA]) {
+        for (const text of [(await get(who, a.reportId)).text, (await history(who, a.reportId, a.sections[0].id)).text]) {
+          for (const other of [ownerB, assocB]) for (const needle of [nameOf(other), other.email, other.userId]) expect(text, `${who.label} saw ${needle}`).not.toContain(needle);
+        }
+        // And A cannot ask for B's report or its section.
+        expect((await get(who, b.reportId)).status).toBe(404);
+        expect((await history(who, b.reportId, b.sections[0].id)).status).toBe(404);
+      }
+      // The database refuses a version whose author belongs to another practice (composite foreign key).
+      const forged = h.owner.insert(schema.reportVersions).values({ organizationId: orgA, reportId: a.reportId, sectionId: a.sections[1].id, versionNumber: 1, editType: "human_edit", content: { text: "forged" }, createdByUserId: ownerB.userId });
+      await expect(forged).rejects.toMatchObject({ cause: { code: "23503", constraint: "report_versions_created_by_fk" } });
+    });
+
+    it("an associate who cannot see the client, and an admin without a grant, get the same 404 as for a report that does not exist", async () => {
+      const r = await mkReport(orgA, c1.id, ownerA, "draft");
+      const sid = r.sections[0].id;
+      await save(ownerA, r.reportId, sid, { text: "private", baseVersion: 0 });
+      const other = await mkReport(orgA, c2.id, ownerA, "draft");
+      await save(ownerA, other.reportId, other.sections[0].id, { text: "private two", baseVersion: 0 });
+      const missing = "99999999-9999-4999-8999-999999999999";
+      const missingDetail = await get(assocA2, missing);
+      const missingHistory = await history(assocA2, missing, missing);
+      expect(missingDetail.status).toBe(404);
+      for (const [who, rep, sec] of [[assocA2, r.reportId, sid], [assocA, other.reportId, other.sections[0].id], [adminA, other.reportId, other.sections[0].id]] as const) {
+        const d = await get(who, rep);
+        const v = await history(who, rep, sec);
+        expect([d.status, v.status], who.label).toEqual([404, 404]);
+        expect(d.text).toBe(missingDetail.text);
+        expect(v.text).toBe(missingHistory.text);
+        expect(d.text + v.text).not.toContain(nameOf(ownerA));
+      }
+      // A section id that belongs to another report is the same 404, even for the owner.
+      expect((await history(ownerA, r.reportId, other.sections[0].id)).status).toBe(404);
+    });
+
+    it("no email, user id or role of the author is in either response, and no field beyond the documented ones", async () => {
+      const r = await mkReport(orgA, c1.id, ownerA, "draft");
+      const sid = r.sections[0].id;
+      await save(ownerA, r.reportId, sid, { text: "one", baseVersion: 0 });
+      await save(assocA, r.reportId, sid, { text: "two", baseVersion: 1 });
+      for (const who of [ownerA, assocA, adminA]) {
+        const bodies = [(await get(who, r.reportId)).text, (await history(who, r.reportId, sid)).text];
+        for (const text of bodies) {
+          for (const p of [ownerA, assocA]) for (const needle of [p.email, p.userId]) expect(text, `${who.label}: ${needle}`).not.toContain(needle);
+          expect(text).not.toMatch(/"(email|userId|createdByUserId|role|actorUserId|organizationId)"/);
+        }
+        const d = (await get(who, r.reportId)).json.data as D;
+        for (const x of d.sections) expect(Object.keys(x).sort()).toEqual(SECTION_KEYS);
+      }
+    });
+
+    it("the save contract, its 409 and the audit are unchanged", async () => {
+      const r = await mkReport(orgA, c1.id, ownerA, "draft");
+      const sid = r.sections[0].id;
+      const ok = await save(ownerA, r.reportId, sid, { text: "one", baseVersion: 0 });
+      expect(ok.status).toBe(200);
+      expect(Object.keys(ok.json.data as object).sort()).toEqual(["version", "versionId"]);
+      expect((await save(assocA, r.reportId, sid, { text: "late", baseVersion: 0 })).status).toBe(409);
+      // One read, one `report.viewed` row with the role only; the new field adds no row and no key.
+      const count = async (resourceId: string) => (await auditRows(orgA, "report.viewed")).filter((a) => a.resourceId === resourceId);
+      const before = [await count(r.reportId), await count(sid)];
+      await get(ownerA, r.reportId);
+      await history(ownerA, r.reportId, sid);
+      const after = [await count(r.reportId), await count(sid)];
+      expect(after.map((x) => x.length)).toEqual(before.map((x) => x.length + 1));
+      for (const row of after.flat()) expect(row.metadata).toEqual({ role: "owner" });
+    });
+
+    it("the number of statements does not grow with the number of authors or sections written (no N+1)", async () => {
+      const statements = h.statementsOf;
+      const one = await mkReport(orgA, c1.id, ownerA, "draft");
+      await save(ownerA, one.reportId, one.sections[0].id, { text: "x", baseVersion: 0 });
+      const many = await mkReport(orgA, c1.id, ownerA, "draft");
+      for (const [i, sec] of many.sections.entries()) await save(i % 2 ? assocA : ownerA, many.reportId, sec.id, { text: `s${i}`, baseVersion: 0 });
+      // A section with two versions by two different people: its history must still cost one author lookup.
+      await save(assocA, many.reportId, many.sections[0].id, { text: "s0 again", baseVersion: 1 });
+      const none = await mkReport(orgA, c1.id, ownerA, "draft");
+
+      const detailOne = await statements(() => get(ownerA, one.reportId));
+      const detailMany = await statements(() => get(ownerA, many.reportId));
+      const detailNone = await statements(() => get(ownerA, none.reportId));
+      // The session check reads `users` too; the author lookup is the one that selects by a list of ids.
+      const isUsers = (q: string) => /from "users"/.test(q) && /"users"\."id" in \(/.test(q);
+      expect(detailOne.length).toBe(detailMany.length);
+      expect(detailMany.filter(isUsers)).toHaveLength(1);
+      expect(detailOne.filter(isUsers)).toHaveLength(1);
+      expect(detailNone.filter(isUsers)).toHaveLength(0);
+
+      const historyMany = await statements(() => history(ownerA, many.reportId, many.sections[0].id));
+      const historyOne = await statements(() => history(ownerA, one.reportId, one.sections[0].id));
+      expect(((await history(ownerA, many.reportId, many.sections[0].id)).json.data as V[]).map((v) => v.authorName)).toEqual([nameOf(assocA), nameOf(ownerA)]);
+      expect(historyMany.filter(isUsers)).toHaveLength(1);
+      expect(historyMany.length).toBe(historyOne.length);
+      // Two different authors across the six sections, still one lookup for all of them.
+      const authors = new Set((await h.owner.select().from(schema.reportVersions).where(eq(schema.reportVersions.reportId, many.reportId))).map((v) => v.createdByUserId));
+      expect(authors).toEqual(new Set([ownerA.userId, assocA.userId]));
+      const detail = (await get(ownerA, many.reportId)).json.data as D;
+      expect(new Set(detail.sections.map((x) => x.authorName))).toEqual(new Set([nameOf(ownerA), nameOf(assocA)]));
     });
   });
 
