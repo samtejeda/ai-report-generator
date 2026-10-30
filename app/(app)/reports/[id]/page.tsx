@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { GuardedLink } from "@/components/unsaved/guarded-link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { FinalizeButton } from "@/components/reports/finalize-button";
@@ -44,9 +44,9 @@ async function ReportDetail({ params }: { params: Promise<{ id: string }> }) {
       </p>
       {report.status === "generating" ? <p className="text-sm">{REPORT_GENERATING_NOTE}</p> : null}
       {report.status === "error" && canWrite ? <p className="text-sm">{REPORT_ERROR_NOTE}</p> : null}
-      <Link href={`/clients/${report.clientId}`} className="text-sm underline">
+      <GuardedLink href={`/clients/${report.clientId}`} className="text-sm underline">
         Back to the client
-      </Link>
+      </GuardedLink>
       {report.sections.map((s) => (
         <SectionEditor
           key={s.id}

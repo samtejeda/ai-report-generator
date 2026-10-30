@@ -1,4 +1,5 @@
-import Link from "next/link";
+import { GuardedLink } from "@/components/unsaved/guarded-link";
+import { UnsavedGuard } from "@/components/unsaved/unsaved-guard";
 import { Suspense, type ReactNode } from "react";
 import { requireSession } from "@/lib/auth/server";
 import { canReachClinicalContent } from "@/lib/auth/permissions";
@@ -12,10 +13,11 @@ async function SignedIn({ children }: { children: ReactNode }) {
   return (
     <>
       <nav className="flex gap-4 border-b border-zinc-200 p-3 text-sm">
-        {canReachClinicalContent(role) ? <Link href="/clients">Clients</Link> : null}
-        {role === "owner" ? <Link href="/admin">Practice</Link> : null}
-        <Link href="/account">Account</Link>
+        {canReachClinicalContent(role) ? <GuardedLink href="/clients">Clients</GuardedLink> : null}
+        {role === "owner" ? <GuardedLink href="/admin">Practice</GuardedLink> : null}
+        <GuardedLink href="/account">Account</GuardedLink>
       </nav>
+      <UnsavedGuard />
       {children}
     </>
   );
