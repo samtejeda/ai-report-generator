@@ -21,7 +21,7 @@ Roles are still covered in CI at the route level (`authz.integration.test.ts`, 3
 
 ## 0. Setup
 
-1. Make sure the main checkout is on `main` and up to date: `git checkout main && git pull`.
+1. Make sure the main checkout is on `main` and up to date: `git checkout main && git pull`. Sign-out leaves some pages in a stale state (results, finding 13): if a screen looks stuck after signing out or back in, refresh it.
 2. Start the app from the main checkout: `npm run dev`. If Next asks about "Claude Code detected", choose Skip. Do not use the `-auth` worktree's server (old code). Open `http://localhost:3000`.
 3. Keep that terminal visible. Development email is printed there (verification, password reset, "password changed", "two-step sign-in was turned on").
 4. Have your authenticator app and the owner's backup codes ready. You need a second browser profile or a private window for the multi-session steps.
@@ -35,11 +35,11 @@ Roles are still covered in CI at the route level (`authz.integration.test.ts`, 3
 |---|---|---|
 | A1.1 | Open `/` and `/clients` while signed out | Sent to `/login`; no client data visible |
 | A1.2 | Sign in with a wrong password | A generic failure; the same message you would get for an unknown address |
-| A1.3 | Sign in with the right password | The code step appears (authenticator or backup code) |
+| A1.3 | Sign in with the right password, in a **private window** | The code step appears (authenticator or backup code). In your everyday window a 14-day trusted-device cookie may skip it |
 | A1.4 | Enter a wrong code, then the right one | Wrong is refused; right signs you in |
-| A1.5 | Sign out from `/account`, sign in again using a backup code instead | Works once; that code is spent (try it a second time later: refused) |
+| A1.5 | Sign out from `/account`, sign in again using a backup code instead | Works once; that code is spent (try it a second time later: refused). You may have fewer than 10 codes left, and there is no screen to renew them yet |
 | A1.6 | Sign in again with "Trust this device for 14 days" ticked | Next sign-in skips the code step but still asks for the password |
-| A1.7 | `/forgot-password` with your address, then with a made-up address | Same message both times; the terminal prints a reset link only for the real one |
+| A1.7 | `/forgot-password` with your address, then with a made-up address | Same message in the browser both times; the terminal prints a reset link only for the real one (a "user not found" warning in the terminal for the made-up one is the server's own log, not shown to the browser) |
 | A1.8 | Use the printed link, set a new password of at least 12 characters, then sign in | Old password refused, new one works; all other sessions ended; "password changed" email printed |
 
 **A2. Account**
@@ -66,7 +66,7 @@ Roles are still covered in CI at the route level (`authz.integration.test.ts`, 3
 | # | Do | Expect |
 |---|---|---|
 | A4.1 | On a client page, "New report" | A draft report with one empty box per template section |
-| A4.2 | Type text in one section and save | Saved as version 1; the history lists it as a person's edit |
+| A4.2 | Type text in one section and save | Saved as version 1; the history lists it as a person's edit (today it shows the raw `human_edit` and no author; see the results) |
 | A4.3 | Edit and save the same section again | A new version; the older one stays in the history |
 | A4.4 | Open the same report in the second browser profile, save there, then save in the first | The first save is refused as out of date (someone saved first) and tells you so; no text is lost silently |
 | A4.5 | A section with 20 001 characters | Refused |
@@ -154,6 +154,8 @@ Create a second practice with `scripts/bootstrap-owner.mjs` (dry run first, chec
 | E3 | Call `/api/clients/<practice 1 id>` and `/api/reports/<practice 1 id>` | 404, identical to a missing id |
 
 ## Results
+
+First run (owner only, 2026-10-28 to 2026-10-30): see [MANUAL-TEST-RESULTS-2026-10-28.md](MANUAL-TEST-RESULTS-2026-10-28.md). The table below is for the next run; fill it in then.
 
 | Step | Pass / Fail / Skip | What happened (Fail only) |
 |---|---|---|
