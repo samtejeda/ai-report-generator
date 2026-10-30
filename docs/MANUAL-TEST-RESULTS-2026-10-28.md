@@ -58,6 +58,8 @@ What happens today is optimistic concurrency: a save carries the version the tex
 
 Recommendation: 1 and 2 together.
 
+**Update 2026-10-30:** built (#68, #70, and the check endpoint in progress), then flagged as possibly removable: Sam expects that two people will rarely or never edit the same report, so the compare screen is being simplified to one sentence and two buttons, and the whole feature is a candidate for removal or reduction after real use (decisions table, row 15). The server's version check, the insert-only history and the unsaved-changes warning stay in every case.
+
 ## Ideas that came up (new scope, not decided)
 
 - Return the person to the page they wanted after sign-in (needs a safe same-origin allow-list; the proxy deliberately sends no `?next=`).
