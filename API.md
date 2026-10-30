@@ -12,6 +12,7 @@ Inventory of every endpoint and server action. Updated in the same commit as any
 - Lists are paginated (cursor or limit/offset with a max).
 - Never include `password_hash`, tokens, or other tenants' fields in responses.
 - Never log request bodies; audit events carry ids, not PHI.
+- Auth rate limits (`/api/auth/*`, the Rate limit column below) count requests per client address and path, never per account (a per-account count would confirm which accounts exist), and every request counts, successful ones included. The refusal is `429` `{"message":"Too many requests. Please try again later."}` (Better Auth's own body, not the JSON error shape above) with an `X-Retry-After` header: whole seconds until the address may try again (at most the 15 minute window). The same page can read it (same origin; CORS stays restricted). It appears only on that 429, is the same for a real and a made-up account, and nothing else adds it. Every auth audit row records the address as received (the first `x-forwarded-for` entry), never the masked form Better Auth uses for its limiter.
 - Generation endpoints call inference only through `lib/ai/inference.ts`. Today the one generation endpoint is synchronous and stub-only (the finished, checked result is the response); streaming comes with real mode.
 
 ## Endpoints
@@ -19,7 +20,7 @@ Inventory of every endpoint and server action. Updated in the same commit as any
 | Method | Path | Auth / roles | Purpose | Audit event | Rate limit |
 |---|---|---|---|---|---|
 | GET | `/api/health` | Public (intentionally; no tenant data) | Liveness plus database reachability (`select 1`). Returns `{status:"ok"}` or 503 `{status:"unavailable"}`; no versions, hosts, or error text. | None (health noise excluded) | None yet (resilience-builder to add a coarse limit) |
-| POST | `/api/auth/sign-in/email` | Public (it creates the session) | Email + password sign-in. Needs a verified, active account; sets the session cookie (httpOnly, SameSite=Lax, 12 h cap). Same 401 for a wrong password and an unknown address. | `auth.login` / `auth.login_failed` (known users only) | 5 per 15 min per client address |
+| POST | `/api/auth/sign-in/email` | Public (it creates the session) | Email + password sign-in. Needs a verified, active account; sets the session cookie (httpOnly, SameSite=Lax, 12 h cap). Same 401 for a wrong password and an unknown address. | `auth.login` / `auth.login_failed` (known users only) | 10 per 15 min per client address |
 | POST | `/api/auth/sign-out` | Session | Ends the session server-side and clears the cookie. | `auth.logout` | Default (60 per minute per address) |
 | POST | `/api/auth/request-password-reset` | Public | Emails a single-use reset link (valid 60 min) if the address has an active account. Same answer either way. | `auth.password_reset_requested` (known users only) | 3 per 15 min per client address |
 | GET | `/api/auth/reset-password/{token}` | Public (the token is the credential) | Validates a link and redirects to `/reset-password?token=…` (or `?error=INVALID_TOKEN`). | None | 5 per 15 min per client address |

@@ -54,7 +54,9 @@ export const PASSWORD_MAX_LENGTH = 128;
  * seconds the endpoint answers 429 until `window` seconds pass without a new request.
  */
 export const RATE_LIMITS = {
-  signIn: { window: 15 * 60, max: 5 },
+  // Raised from 5 on 2026-10-30 (Sam, manual test finding 3). Counts every request from the address,
+  // successful sign-ins included, and never the account: counting per account would confirm which accounts exist.
+  signIn: { window: 15 * 60, max: 10 },
   requestPasswordReset: { window: 15 * 60, max: 3 },
   resetPassword: { window: 15 * 60, max: 5 },
   sendVerificationEmail: { window: 15 * 60, max: 3 },

@@ -96,13 +96,18 @@ export function createAuth(deps: AuthDeps) {
     return rows[0];
   }
 
+  /**
+   * Every auth audit row carries the address as received (`clientIp`), or none. Better Auth keeps a
+   * normalized form of the address (IPv6 masked to its /64: `::1` becomes `0000:…:0000`) for its rate
+   * limiter and the session row; that mask is a grouping key, not evidence, and must never be passed
+   * in here, which is why this takes headers only.
+   */
   async function record(
     user: Pick<UserRow, "id" | "organizationId">,
     event: Omit<AuditEvent, "resourceType" | "resourceId">,
     headers?: Headers | null,
-    knownIp?: string | null,
   ) {
-    const ip = knownIp ?? clientIp(headers);
+    const ip = clientIp(headers);
     await deps.audit(
       { organizationId: user.organizationId, actorUserId: user.id, requestId: headers?.get("x-request-id") ?? null },
       { ...event, resourceType: "users", resourceId: user.id, metadata: { ...(ip ? { ip } : {}), ...event.metadata } },
@@ -157,7 +162,7 @@ export function createAuth(deps: AuthDeps) {
               // No code step: a trusted device. (Users without MFA are logged by the session hook.)
               const created = ctx.context.newSession;
               const row = created ? await findUserById(created.user.id) : undefined;
-              if (row?.twoFactorEnabled) await record(row, { action: "auth.login", metadata: { method: "password+trusted_device" } }, ctx.headers, created?.session.ipAddress);
+              if (row?.twoFactorEnabled) await record(row, { action: "auth.login", metadata: { method: "password+trusted_device" } }, ctx.headers);
               return;
             }
 
@@ -181,7 +186,7 @@ export function createAuth(deps: AuthDeps) {
               const row = userId ? await findUserById(userId) : undefined;
               if (!row) return;
               if (signIn) {
-                await record(row, { action: "auth.login", metadata: { method: `password+${method}` } }, ctx.headers, ctx.context.newSession?.session.ipAddress);
+                await record(row, { action: "auth.login", metadata: { method: `password+${method}` } }, ctx.headers);
                 if (method === "backup_code") await record(row, { action: "auth.mfa_backup_code_used" }, ctx.headers);
                 if ((ctx.body as { trustDevice?: unknown } | undefined)?.trustDevice === true) await record(row, { action: "auth.mfa_device_trusted" }, ctx.headers);
               } else if (ctx.context.newSession) {
@@ -340,7 +345,7 @@ export function createAuth(deps: AuthDeps) {
           before: async (session, context) => {
             const row = await findUserById(session.userId);
             if (!row || row.deletedAt) {
-              if (row) await record(row, { action: "auth.login_failed", outcome: "failure", metadata: { reason: "deactivated" } }, null, session.ipAddress);
+              if (row) await record(row, { action: "auth.login_failed", outcome: "failure", metadata: { reason: "deactivated" } }, context?.headers);
               return false;
             }
             // Finishing MFA enrollment makes the plugin swap the signed-in session for a new row.
@@ -354,11 +359,11 @@ export function createAuth(deps: AuthDeps) {
             const capDeadline = createdAt.getTime() + SESSION_ABSOLUTE_SECONDS * 1000;
             return { data: { ...session, createdAt, expiresAt: new Date(Math.min(idleDeadline, capDeadline)) } };
           },
-          after: async (session) => {
+          after: async (session, context) => {
             const row = await findUserById(session.userId);
             // With MFA on, a session row exists briefly before the code step (and again after it);
             // "login" is recorded by the MFA audit plugin once the sign-in is really complete.
-            if (row && !row.twoFactorEnabled) await record(row, { action: "auth.login", metadata: { method: "password" } }, null, session.ipAddress);
+            if (row && !row.twoFactorEnabled) await record(row, { action: "auth.login", metadata: { method: "password" } }, context?.headers);
           },
         },
       },

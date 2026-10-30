@@ -9,6 +9,11 @@ import type { Mail } from "@/lib/email";
 import { createAuth, type Auth } from "./auth";
 import { resolveSession } from "./session";
 
+// The catch-all route module reads its Auth from the server module; hand it this file's instance so the
+// rate-limit test can go through the real route (allow-list, response) rather than around it.
+const serverModule = vi.hoisted(() => ({ auth: undefined as { handler: (request: Request) => Promise<Response> } | undefined }));
+vi.mock("@/lib/auth/server", () => ({ getAuth: () => serverModule.auth }));
+
 // Auth flows against a scratch Neon branch (the `test` branch of the dev project), through the
 // REAL Better Auth handler and the REAL database roles: auth_runtime for Better Auth,
 // app_runtime for audit writes and the cross-role checks. Needs TEST_* variables from
@@ -210,6 +215,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
       now,
     });
     hash = (await auth.$context).password.hash;
+    serverModule.auth = auth;
   }, 180_000);
 
   afterAll(async () => {
@@ -918,6 +924,89 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
       });
     });
 
+    describe("audit address (manual test finding 8)", () => {
+      // Better Auth masks an IPv6 address to its /64 for the rate limiter and the session row (::1 becomes
+      // 0000:0000:0000:0000:0000:0000:0000:0000). Every auth audit row must carry the address as received
+      // instead. Fresh IPv6 addresses per test, because rate-limit counters persist for 15 minutes (so
+      // ::1 itself is not used here; it masks the same way).
+      const h16 = () => crypto.getRandomValues(new Uint16Array(1))[0].toString(16);
+      const v6 = () => `2001:db8:${h16()}:${h16()}::17`;
+      const EXPANDED = /^[0-9a-f]{4}(:[0-9a-f]{4}){7}$/;
+      const seenIds = async (orgId: string) => new Set((await auditRows(orgId)).map((r) => r.id));
+      // The rows written by the steps of one test (by id, never by position), each with its address.
+      async function writtenSince(orgId: string, seen: Set<string>) {
+        return (await auditRows(orgId)).filter((r) => !seen.has(r.id)).map((r) => ({ action: r.action, ip: (r.metadata as { ip?: string }).ip, reason: (r.metadata as { reason?: string }).reason }));
+      }
+      function expectAddress(rows: { action: string; ip?: string }[], ip: string, actions: string[]) {
+        for (const a of actions) expect(rows.some((r) => r.action === a && r.ip === ip), `${a} carries the address as received`).toBe(true);
+        for (const r of rows) {
+          if (r.ip === undefined) continue;
+          expect(r.ip, `${r.action} address`).toBe(ip);
+          expect(r.ip, `${r.action} address is not the expanded, masked form`).not.toMatch(EXPANDED);
+        }
+      }
+
+      it("a password-only sign-in, a refused sign-in and a sign-out all store the address as received", async () => {
+        const orgId = await seedOrg("addr-plain");
+        const u = await seedUser(orgId, "addr-plain");
+        const ip = v6();
+        const seen = await seenIds(orgId);
+        const ok = await signIn(u.email, GOOD_PASSWORD, ip);
+        expect(ok.res.status).toBe(200);
+        expect((await signIn(u.email, "wrong password here 1", ip)).res.status).toBe(401);
+        expect((await call("/sign-out", { body: {}, cookie: ok.cookie, ip })).status).toBe(200);
+        expectAddress(await writtenSince(orgId, seen), ip, ["auth.login", "auth.login_failed", "auth.logout"]);
+      });
+
+      it("a code-step sign-in (challenge, wrong code, right code) stores the address as received on every row", async () => {
+        const e = await enrolled("addr-totp");
+        const ip = v6();
+        const seen = await seenIds(e.orgId);
+        const c = await call("/sign-in/email", { body: { email: e.email, password: GOOD_PASSWORD }, ip });
+        const cookie = cookieFrom(c);
+        expect((await call("/two-factor/verify-totp", { body: { code: wrongCode(e.secret) }, cookie, ip })).status).toBe(401);
+        expect((await call("/two-factor/verify-totp", { body: { code: totpCode(e.secret) }, cookie, ip })).status).toBe(200);
+        const rows = await writtenSince(e.orgId, seen);
+        expectAddress(rows, ip, ["auth.mfa_challenge", "auth.mfa_failed", "auth.login"]);
+      });
+
+      it("a backup-code sign-in that trusts the device, and the later trusted-device sign-in, store the address as received", async () => {
+        const e = await enrolled("addr-backup");
+        const ip = v6();
+        const seen = await seenIds(e.orgId);
+        const c = await call("/sign-in/email", { body: { email: e.email, password: GOOD_PASSWORD }, ip });
+        const ok = await call("/two-factor/verify-backup-code", { body: { code: e.backupCodes[0], trustDevice: true }, cookie: cookieFrom(c), ip });
+        expect(ok.status).toBe(200);
+        const trust = named(ok, "trust_device");
+        expect(trust).toBeDefined();
+        const again = await call("/sign-in/email", { body: { email: e.email, password: GOOD_PASSWORD }, cookie: trust, ip });
+        expect(((await again.json()) as { twoFactorRedirect?: boolean }).twoFactorRedirect).toBeUndefined();
+        const rows = await writtenSince(e.orgId, seen);
+        expectAddress(rows, ip, ["auth.login", "auth.mfa_backup_code_used", "auth.mfa_device_trusted"]);
+        expect(rows.filter((r) => r.action === "auth.login")).toHaveLength(2);
+      });
+
+      it("the refusal of a deactivated user stores the address as received", async () => {
+        const orgId = await seedOrg("addr-deactivated");
+        const u = await seedUser(orgId, "addr-deactivated", { deleted: true });
+        const ip = v6();
+        const seen = await seenIds(orgId);
+        expect((await signIn(u.email, GOOD_PASSWORD, ip)).res.status).toBeGreaterThanOrEqual(400);
+        const rows = await writtenSince(orgId, seen);
+        expectAddress(rows, ip, ["auth.login_failed"]);
+        expect(rows.some((r) => r.reason === "deactivated")).toBe(true);
+      });
+
+      it("an IPv4 address is stored unchanged (the mask only ever differed for IPv6)", async () => {
+        const orgId = await seedOrg("addr-v4");
+        const u = await seedUser(orgId, "addr-v4");
+        const ip = nextIp();
+        const seen = await seenIds(orgId);
+        expect((await signIn(u.email, GOOD_PASSWORD, ip)).res.status).toBe(200);
+        expectAddress(await writtenSince(orgId, seen), ip, ["auth.login"]);
+      });
+    });
+
     describe("role separation for the MFA tables", () => {
       it("app_runtime cannot read the table or flip the MFA flag; auth_runtime cannot delete an enrollment", async () => {
         const e = await enrolled("mfa-roles");
@@ -1195,11 +1284,11 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
   });
 
   describe("rate limits (audit 03 item 4)", () => {
-    it("sign-in: the 6th attempt from one address in 15 minutes gets 429, even with the right password; another address is unaffected", async () => {
+    it("sign-in: the 11th attempt from one address in 15 minutes gets 429, even with the right password; another address is unaffected", async () => {
       const orgId = await seedOrg("rl-signin");
       const u = await seedUser(orgId, "rl-signin");
       const ip = nextIp();
-      for (let i = 0; i < 5; i++) expect((await signIn(u.email, "wrong password here 1", ip)).res.status).toBe(401);
+      for (let i = 0; i < 10; i++) expect((await signIn(u.email, "wrong password here 1", ip)).res.status).toBe(401);
       const blocked = await signIn(u.email, GOOD_PASSWORD, ip);
       expect(blocked.res.status).toBe(429);
       expect(blocked.cookie).toBe("");
@@ -1207,6 +1296,33 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
       expect((await signIn(u.email, GOOD_PASSWORD, nextIp())).res.status).toBe(200);
       // A throttled attempt never reaches the password check, so it creates no session.
       expect((await owner.select().from(schema.authSessions).where(eq(schema.authSessions.userId, u.userId))).length).toBe(1);
+    });
+
+    it("the wait time reaches the browser through the real route, and says nothing about the account", async () => {
+      const { POST } = await import("@/app/api/auth/[...all]/route");
+      const attempt = (email: string, ip: string) =>
+        POST(new Request(`${BASE}/api/auth/sign-in/email`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": ip, origin: BASE, "user-agent": "vitest" }, body: JSON.stringify({ email, password: "wrong password here 1" }) }));
+      const orgId = await seedOrg("rl-header");
+      const known = await seedUser(orgId, "rl-header");
+      const ipKnown = nextIp();
+      const ipUnknown = nextIp();
+      const unknownEmail = emailFor("rl-header-nobody");
+      for (let i = 0; i < 10; i++) {
+        expect((await attempt(known.email, ipKnown)).status).toBe(401);
+        expect((await attempt(unknownEmail, ipUnknown)).status).toBe(401);
+      }
+      const a = await attempt(known.email, ipKnown);
+      const b = await attempt(unknownEmail, ipUnknown);
+      expect([a.status, b.status]).toEqual([429, 429]);
+      // Whole seconds, within the 15 minute window, on the 429 only.
+      for (const res of [a, b]) {
+        const wait = res.headers.get("x-retry-after");
+        expect(wait).toMatch(/^[1-9]\d*$/);
+        expect(Number(wait)).toBeLessThanOrEqual(15 * 60);
+      }
+      // A real and a made-up account get the same body, and neither echoes the address or the account.
+      expect(await a.text()).toBe(await b.text());
+      expect((await attempt(known.email, nextIp())).headers.get("x-retry-after")).toBeNull();
     });
 
     it("password reset requests: the 4th from one address gets 429", async () => {
