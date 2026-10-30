@@ -1,10 +1,20 @@
+import { redirect } from "next/navigation";
+import { Suspense } from "react";
+import { rootRedirect } from "@/lib/auth/landing";
+import { currentVisitor } from "@/lib/auth/visitor";
+
+// `/` has no content of its own: a signed-in person goes to the working home, a person who has not
+// finished setting up the authenticator app goes to finish it, everyone else to sign in. The check
+// is server side, here; it reads no tenant data (the page stays on the public list).
+async function Landing() {
+  redirect(rootRedirect(await currentVisitor()));
+  return null;
+}
+
 export default function Home() {
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center gap-3 p-6">
-      <h1 className="text-2xl font-semibold">AI Report Generator</h1>
-      <p className="text-sm text-zinc-600">
-        Scaffold placeholder. Features arrive in later pull requests.
-      </p>
-    </main>
+    <Suspense fallback={<p className="p-6 text-sm">Loading…</p>}>
+      <Landing />
+    </Suspense>
   );
 }
