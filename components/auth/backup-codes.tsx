@@ -11,6 +11,7 @@ import {
   formatCodesForCopy,
   validateBackupCodesPassword,
 } from "@/lib/auth/backup-codes-form";
+import { captureWait } from "@/lib/auth/rate-limit-wait";
 import { resetFormWhenHidden, useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 import { PasswordField } from "./password-field";
 
@@ -40,11 +41,12 @@ export function BackupCodes() {
     if (invalid) return setMessage(invalid);
     setPending(true);
     setMessage(null);
-    const { data, error } = await authClient.twoFactor.generateBackupCodes({ password });
+    const wait = captureWait();
+    const { data, error } = await authClient.twoFactor.generateBackupCodes({ password }, wait.fetchOptions);
     setPending(false);
     if (error || !data || !Array.isArray(data.backupCodes)) {
       // The typed password stays in the box.
-      return setMessage(backupCodesErrorMessage(error ?? null));
+      return setMessage(backupCodesErrorMessage(error ?? null, wait.seconds()));
     }
     setCodes(data.backupCodes);
     setOpen(false);

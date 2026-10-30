@@ -1,4 +1,5 @@
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "./config";
+import { tooManyAttemptsMessage } from "./rate-limit-wait";
 
 /**
  * The checks the change-password form makes before it calls the server, so a typo costs no request
@@ -17,9 +18,9 @@ export function validatePasswordChange(current: string, next: string, confirm: s
 }
 
 /** Fixed messages for what the server can answer; never the server's own text. */
-export function changePasswordErrorMessage(error: { status?: number; code?: string } | null): string | null {
+export function changePasswordErrorMessage(error: { status?: number; code?: string } | null, waitSeconds: number | null = null): string | null {
   if (!error) return null;
-  if (error.status === 429) return "Too many attempts. Wait a few minutes and try again.";
+  if (error.status === 429) return tooManyAttemptsMessage(waitSeconds);
   if (error.status === 401) return "Your session ended. Sign in again.";
   if (error.code === "INVALID_PASSWORD") return "Your current password is not correct.";
   if (error.code === "PASSWORD_TOO_SHORT") return `Use at least ${PASSWORD_MIN_LENGTH} characters for the new password.`;

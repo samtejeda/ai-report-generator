@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth/client";
 import { HOME_PATH } from "@/lib/auth/landing";
 import { codeErrorMessage, codeStepExpired, signInErrorMessage } from "@/lib/auth/login-messages";
+import { captureWait } from "@/lib/auth/rate-limit-wait";
 import { resetFormWhenHidden, useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 import { fieldClass } from "./auth-card";
 import { PasswordField } from "./password-field";
@@ -46,12 +47,17 @@ export function LoginForm() {
     const typedEmail = String(form.get("email") ?? "");
     setPending(true);
     setMessage(null);
-    const { data, error } = await authClient.signIn.email({
-      email: typedEmail,
-      password: String(form.get("password") ?? ""),
-    });
+    // The wait time of a 429 comes from its X-Retry-After header (lib/auth/rate-limit-wait.ts).
+    const wait = captureWait();
+    const { data, error } = await authClient.signIn.email(
+      {
+        email: typedEmail,
+        password: String(form.get("password") ?? ""),
+      },
+      wait.fetchOptions,
+    );
     if (error) {
-      setMessage(signInErrorMessage(error));
+      setMessage(signInErrorMessage(error, wait.seconds()));
       setPending(false);
       return;
     }
@@ -71,11 +77,12 @@ export function LoginForm() {
     const trustDevice = form.get("trust-device") === "on";
     setPending(true);
     setMessage(null);
+    const wait = captureWait();
     const { error } = useBackup
-      ? await authClient.twoFactor.verifyBackupCode({ code, trustDevice })
-      : await authClient.twoFactor.verifyTotp({ code, trustDevice });
+      ? await authClient.twoFactor.verifyBackupCode({ code, trustDevice }, wait.fetchOptions)
+      : await authClient.twoFactor.verifyTotp({ code, trustDevice }, wait.fetchOptions);
     if (error) {
-      setMessage(codeErrorMessage(error));
+      setMessage(codeErrorMessage(error, wait.seconds()));
       setPending(false);
       // The challenge is over: the only way forward is the password again, so go back to it.
       if (codeStepExpired(error)) {

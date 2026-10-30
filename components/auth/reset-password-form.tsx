@@ -5,6 +5,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth/client";
 import { PASSWORD_MIN_LENGTH } from "@/lib/auth/config";
+import { captureWait, tooManyAttemptsMessage } from "@/lib/auth/rate-limit-wait";
 import { resetFormWhenHidden, useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 import { PasswordField } from "./password-field";
 
@@ -39,10 +40,11 @@ export function ResetPasswordForm({ token }: { token: string | null }) {
     }
     setPending(true);
     setMessage(null);
-    const { error } = await authClient.resetPassword({ newPassword, token: token ?? "" });
+    const wait = captureWait();
+    const { error } = await authClient.resetPassword({ newPassword, token: token ?? "" }, wait.fetchOptions);
     setPending(false);
     if (!error) return setDone(true);
-    if (error.status === 429) return setMessage("Too many attempts. Wait a few minutes and try again.");
+    if (error.status === 429) return setMessage(tooManyAttemptsMessage(wait.seconds()));
     if (error.code === "INVALID_TOKEN") return setInvalidLink(true);
     if (error.code === "PASSWORD_TOO_SHORT") return setMessage(`Use at least ${PASSWORD_MIN_LENGTH} characters.`);
     setMessage("Could not reset the password. Try again.");
