@@ -110,7 +110,7 @@ When Tailscale is installed and `tailscale serve` exposes Ollama as an `https://
 
 | # | Do | Expect |
 |---|---|---|
-| D1 | Sign in with a wrong password six times in 15 minutes | A "too many attempts" response after the fifth; it clears after the window |
+| D1 | Sign in with a wrong password eleven times in 15 minutes | A "too many attempts" response on the eleventh (the limit is 10 per 15 minutes per address, raised from 5 on 2026-10-30); it clears after the window |
 | D2 | Leave a session idle for over 2 hours, then click | Sent to sign in again (idle limit 2 hours; absolute limit 12 hours) |
 | D3 | Open `/admin/users` and any page while signed out | Sent to `/login` |
 | D4 | Paste a client or report address from the first browser into a signed-out one | Sent to `/login`, then nothing about the client is shown |

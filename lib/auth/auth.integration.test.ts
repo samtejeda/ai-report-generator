@@ -9,6 +9,11 @@ import type { Mail } from "@/lib/email";
 import { createAuth, type Auth } from "./auth";
 import { resolveSession } from "./session";
 
+// The catch-all route module reads its Auth from the server module; hand it this file's instance so the
+// rate-limit test can go through the real route (allow-list, response) rather than around it.
+const serverModule = vi.hoisted(() => ({ auth: undefined as { handler: (request: Request) => Promise<Response> } | undefined }));
+vi.mock("@/lib/auth/server", () => ({ getAuth: () => serverModule.auth }));
+
 // Auth flows against a scratch Neon branch (the `test` branch of the dev project), through the
 // REAL Better Auth handler and the REAL database roles: auth_runtime for Better Auth,
 // app_runtime for audit writes and the cross-role checks. Needs TEST_* variables from
@@ -210,6 +215,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
       now,
     });
     hash = (await auth.$context).password.hash;
+    serverModule.auth = auth;
   }, 180_000);
 
   afterAll(async () => {
@@ -1278,11 +1284,11 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
   });
 
   describe("rate limits (audit 03 item 4)", () => {
-    it("sign-in: the 6th attempt from one address in 15 minutes gets 429, even with the right password; another address is unaffected", async () => {
+    it("sign-in: the 11th attempt from one address in 15 minutes gets 429, even with the right password; another address is unaffected", async () => {
       const orgId = await seedOrg("rl-signin");
       const u = await seedUser(orgId, "rl-signin");
       const ip = nextIp();
-      for (let i = 0; i < 5; i++) expect((await signIn(u.email, "wrong password here 1", ip)).res.status).toBe(401);
+      for (let i = 0; i < 10; i++) expect((await signIn(u.email, "wrong password here 1", ip)).res.status).toBe(401);
       const blocked = await signIn(u.email, GOOD_PASSWORD, ip);
       expect(blocked.res.status).toBe(429);
       expect(blocked.cookie).toBe("");
@@ -1290,6 +1296,33 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
       expect((await signIn(u.email, GOOD_PASSWORD, nextIp())).res.status).toBe(200);
       // A throttled attempt never reaches the password check, so it creates no session.
       expect((await owner.select().from(schema.authSessions).where(eq(schema.authSessions.userId, u.userId))).length).toBe(1);
+    });
+
+    it("the wait time reaches the browser through the real route, and says nothing about the account", async () => {
+      const { POST } = await import("@/app/api/auth/[...all]/route");
+      const attempt = (email: string, ip: string) =>
+        POST(new Request(`${BASE}/api/auth/sign-in/email`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": ip, origin: BASE, "user-agent": "vitest" }, body: JSON.stringify({ email, password: "wrong password here 1" }) }));
+      const orgId = await seedOrg("rl-header");
+      const known = await seedUser(orgId, "rl-header");
+      const ipKnown = nextIp();
+      const ipUnknown = nextIp();
+      const unknownEmail = emailFor("rl-header-nobody");
+      for (let i = 0; i < 10; i++) {
+        expect((await attempt(known.email, ipKnown)).status).toBe(401);
+        expect((await attempt(unknownEmail, ipUnknown)).status).toBe(401);
+      }
+      const a = await attempt(known.email, ipKnown);
+      const b = await attempt(unknownEmail, ipUnknown);
+      expect([a.status, b.status]).toEqual([429, 429]);
+      // Whole seconds, within the 15 minute window, on the 429 only.
+      for (const res of [a, b]) {
+        const wait = res.headers.get("x-retry-after");
+        expect(wait).toMatch(/^[1-9]\d*$/);
+        expect(Number(wait)).toBeLessThanOrEqual(15 * 60);
+      }
+      // A real and a made-up account get the same body, and neither echoes the address or the account.
+      expect(await a.text()).toBe(await b.text());
+      expect((await attempt(known.email, nextIp())).headers.get("x-retry-after")).toBeNull();
     });
 
     it("password reset requests: the 4th from one address gets 429", async () => {
