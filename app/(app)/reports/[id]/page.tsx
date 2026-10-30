@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { FinalizeButton } from "@/components/reports/finalize-button";
+import { LocalTime } from "@/components/reports/local-time";
 import { SectionEditor } from "@/components/reports/section-editor";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/guard";
@@ -32,7 +33,12 @@ async function ReportDetail({ params }: { params: Promise<{ id: string }> }) {
     <>
       <p className="text-sm">
         Status: <strong>{report.status}</strong>
-        {report.finalizedAt ? ` (finalized ${new Date(report.finalizedAt).toLocaleString()})` : ""}
+        {report.finalizedAt ? (
+          <>
+            {" "}
+            (finalized <LocalTime iso={report.finalizedAt} />)
+          </>
+        ) : null}
       </p>
       {report.status === "generating" ? <p className="text-sm">{REPORT_GENERATING_NOTE}</p> : null}
       {report.status === "error" && canWrite ? <p className="text-sm">{REPORT_ERROR_NOTE}</p> : null}
@@ -50,6 +56,9 @@ async function ReportDetail({ params }: { params: Promise<{ id: string }> }) {
           editable={editable}
           canGenerate={canOfferGenerate({ canWrite, status: report.status, type: s.type, version: s.version })}
           isTestText={isTestModelText(s.editType)}
+          editType={s.editType}
+          authorName={s.authorName}
+          editedAt={s.editedAt}
         />
       ))}
       {canWrite && report.status === "generated" ? <FinalizeButton reportId={report.id} /> : null}

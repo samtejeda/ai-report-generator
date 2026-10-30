@@ -5,10 +5,12 @@ import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { fieldClass } from "@/components/auth/auth-card";
 import { GenerateSectionButton } from "@/components/reports/generate-section-button";
+import { LocalTime } from "@/components/reports/local-time";
 import { TEST_TEXT_MARKER } from "@/lib/reports/generate-messages";
+import { versionAttribution } from "@/lib/reports/version-label";
 import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
-type Version = { id: string; version: number; editType: string; text: string; createdAt: string };
+type Version = { id: string; version: number; editType: string; text: string; createdAt: string; authorName: string | null };
 
 // One section of a report: a text box, Save, and the section's history. Save sends the version the
 // text was loaded from; if somebody saved first the server answers 409 and nothing is overwritten.
@@ -21,6 +23,9 @@ export function SectionEditor({
   editable,
   canGenerate,
   isTestText,
+  editType,
+  authorName,
+  editedAt,
 }: {
   reportId: string;
   sectionId: string;
@@ -32,6 +37,10 @@ export function SectionEditor({
   canGenerate: boolean;
   /** The current version is the test model's and nobody has edited it since. */
   isTestText: boolean;
+  /** Who wrote the current version and when (null for a section nobody has written). Display name only. */
+  editType: string | null;
+  authorName: string | null;
+  editedAt: string | null;
 }) {
   const router = useRouter();
   const [version, setVersion] = useState(initialVersion);
@@ -91,6 +100,11 @@ export function SectionEditor({
       ) : (
         <p className="whitespace-pre-wrap">{initialText || "—"}</p>
       )}
+      {editedAt ? (
+        <p>
+          {versionAttribution({ editType, authorName })} · <LocalTime iso={editedAt} />
+        </p>
+      ) : null}
       {editable && canGenerate ? <GenerateSectionButton reportId={reportId} sectionId={sectionId} boxHasText={boxHasText} /> : null}
       {message ? <p role="alert">{message}</p> : null}
       {saved ? <p role="status">Saved as version {version}.</p> : null}
@@ -101,7 +115,7 @@ export function SectionEditor({
         <ol className="flex flex-col gap-2">
           {history.map((v) => (
             <li key={v.id}>
-              <span className="font-medium">Version {v.version}</span> ({v.editType}, {new Date(v.createdAt).toLocaleString()})
+              <span className="font-medium">Version {v.version}</span> · {versionAttribution(v)} · <LocalTime iso={v.createdAt} />
               <p className="whitespace-pre-wrap">{v.text || "—"}</p>
             </li>
           ))}
