@@ -1,19 +1,48 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { fieldClass } from "@/components/auth/auth-card";
 import { GenerateSectionButton } from "@/components/reports/generate-section-button";
 import { LocalTime } from "@/components/reports/local-time";
 import { TEST_TEXT_MARKER } from "@/lib/reports/generate-messages";
+import {
+  CANCELLED_NOTE,
+  CANCEL_BUTTON,
+  CONFLICT_AGAIN,
+  CONFLICT_EXPLAIN,
+  CONFLICT_HEADING,
+  CONFLICT_MINE_LABEL,
+  CONFLICT_THEIRS_LABEL,
+  HISTORY_UNAVAILABLE,
+  KEEP_MINE_BUTTON,
+  SAVE_CLOSED,
+  SAVE_FAILED,
+  SAVE_GONE,
+  SAVE_INVALID,
+  SAVE_UNCHANGED,
+  SAVE_UNREADABLE,
+  TAKE_THEIRS_BUTTON,
+  TOOK_THEIRS_NOTE,
+} from "@/lib/reports/save-messages";
+import { decideAfterRefusal, readCurrentSection, reconcileDraft, saveSectionCall, type CurrentSection } from "@/lib/reports/save-section-call";
 import { versionAttribution } from "@/lib/reports/version-label";
 import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
 type Version = { id: string; version: number; editType: string; text: string; createdAt: string; authorName: string | null };
 
-// One section of a report: a text box, Save, and the section's history. Save sends the version the
-// text was loaded from; if somebody saved first the server answers 409 and nothing is overwritten.
+/** A save the server refused because somebody saved first: their text, and the person's own. */
+type Conflict = { theirs: CurrentSection; mine: string };
+
+// One section of a report: a text box, Save, and the section's history.
+//
+// Save sends the version the text was loaded from (`base`). If somebody saved first the server
+// answers 409 and nothing is overwritten; this component then reads the newer text and shows it
+// beside the person's own with three buttons, and nothing is replaced without a click. The text in
+// the box is a draft held in state: it is never replaced by a newer server copy unless the box is
+// untouched (reconcileDraft), so another section's save, a refresh or a colleague's edit cannot
+// wipe it (audit 01 item 7). The server re-checks every save; none of this is a gate.
 export function SectionEditor({
   reportId,
   sectionId,
@@ -30,6 +59,7 @@ export function SectionEditor({
   reportId: string;
   sectionId: string;
   title: string;
+  /** The server's current text and version. When they change the box follows only if untouched. */
   initialText: string;
   initialVersion: number;
   editable: boolean;
@@ -43,73 +73,209 @@ export function SectionEditor({
   editedAt: string | null;
 }) {
   const router = useRouter();
-  const [version, setVersion] = useState(initialVersion);
+  const headingId = useId();
+  const boxRef = useRef<HTMLTextAreaElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const hadConflict = useRef(false);
+
+  // The draft in the box, and the version and text it was written against.
+  const [draft, setDraft] = useState(initialText);
+  const [base, setBase] = useState({ version: initialVersion, text: initialText });
+  const [seen, setSeen] = useState({ initialText, initialVersion });
   const [message, setMessage] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [pending, setPending] = useState(false);
+  const [conflict, setConflict] = useState<Conflict | null>(null);
   const [history, setHistory] = useState<Version[] | null>(null);
-  // Next keeps this page alive and hidden and restores it: drop stale "Saved as version N." and error
-  // lines. The text in the box is a draft and stays.
+
+  // Next keeps this page alive and hidden and restores it: drop stale "Saved as version N." lines,
+  // errors, and the other person's text. The draft in the box stays.
   useResetWhenHidden(() => {
     setMessage(null);
+    setNote(null);
     setSaved(false);
+    setConflict(null);
   });
-  const [boxHasText, setBoxHasText] = useState(initialText.trim().length > 0);
+
+  // The server's copy changed (a refresh after this or another section's save, a generation, a
+  // colleague). While a conflict is on screen nothing is adopted; it is settled when it closes.
+  if (!conflict && (seen.initialText !== initialText || seen.initialVersion !== initialVersion)) {
+    setSeen({ initialText, initialVersion });
+    if (seen.initialVersion !== initialVersion) setHistory(null);
+    const next = reconcileDraft({ draft, base }, { version: initialVersion, text: initialText });
+    setDraft(next.draft);
+    setBase(next.base);
+  }
+
+  // Move focus to the conflict when it appears and back to the box when it goes.
+  useEffect(() => {
+    if (conflict) {
+      hadConflict.current = true;
+      headingRef.current?.focus();
+    } else if (hadConflict.current) {
+      hadConflict.current = false;
+      boxRef.current?.focus();
+    }
+  }, [conflict]);
+
+  /** The server refused with 409: find out whether a colleague saved first or the report closed. */
+  async function afterRefusal(mine: string, sentBase: number, again: boolean) {
+    const outcome = decideAfterRefusal(await readCurrentSection(reportId, sectionId), sentBase);
+    switch (outcome.kind) {
+      case "newer":
+        setConflict({ theirs: outcome.theirs, mine });
+        return setMessage(again ? CONFLICT_AGAIN : null);
+      case "closed":
+        setConflict(null);
+        return setMessage(SAVE_CLOSED);
+      case "gone":
+        setConflict(null);
+        return setMessage(SAVE_GONE);
+      case "unreadable":
+        setConflict(null);
+        return setMessage(SAVE_UNREADABLE);
+      case "unchanged":
+        setConflict(null);
+        return setMessage(SAVE_UNCHANGED);
+    }
+  }
+
+  function afterSaved(version: number, text: string) {
+    setBase({ version, text });
+    setDraft(text);
+    setConflict(null);
+    setSaved(true);
+    setHistory(null);
+    router.refresh();
+  }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const text = String(new FormData(event.currentTarget).get("text") ?? "");
+    const mine = draft;
     setPending(true);
     setMessage(null);
+    setNote(null);
     setSaved(false);
-    const res = await fetch(`/api/reports/${reportId}/sections/${sectionId}`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text, baseVersion: version }),
-    }).catch(() => null);
+    const result = await saveSectionCall(reportId, sectionId, mine, base.version);
+    if (result.ok) afterSaved(result.version, mine);
+    else if (result.kind === "refused") await afterRefusal(mine, base.version, false);
+    else setMessage(result.kind === "invalid" ? SAVE_INVALID : SAVE_FAILED);
     setPending(false);
-    if (res?.ok) {
-      const body = (await res.json()) as { data: { version: number } };
-      setVersion(body.data.version);
-      setSaved(true);
-      setHistory(null);
-      return router.refresh();
-    }
-    if (res?.status === 409) return setMessage("This section changed (or the report is closed). Reload the page to see the latest.");
-    if (res?.status === 400) return setMessage("This text cannot be saved. It may be too long or contain unsupported characters.");
-    setMessage("This could not be saved.");
+  }
+
+  async function keepMine() {
+    if (!conflict) return;
+    const { mine, theirs } = conflict;
+    setPending(true);
+    setMessage(null);
+    const result = await saveSectionCall(reportId, sectionId, mine, theirs.version);
+    if (result.ok) afterSaved(result.version, mine);
+    else if (result.kind === "refused") await afterRefusal(mine, theirs.version, true);
+    // Any other failure leaves the panel up so the choice is still there to make.
+    else setMessage(result.kind === "invalid" ? SAVE_INVALID : SAVE_FAILED);
+    setPending(false);
+  }
+
+  function takeTheirs() {
+    if (!conflict) return;
+    const { theirs } = conflict;
+    setDraft(theirs.text);
+    setBase({ version: theirs.version, text: theirs.text });
+    setConflict(null);
+    setMessage(null);
+    setNote(TOOK_THEIRS_NOTE);
+    setHistory(null);
+    // Brings the section's line (author, time) and the page's other state up to date.
+    router.refresh();
+  }
+
+  function cancelConflict() {
+    setConflict(null);
+    setMessage(null);
+    setNote(CANCELLED_NOTE);
   }
 
   async function showHistory() {
     const res = await fetch(`/api/reports/${reportId}/sections/${sectionId}/versions`).catch(() => null);
-    if (!res?.ok) return setMessage("The history could not be loaded.");
+    if (!res?.ok) return setMessage(HISTORY_UNAVAILABLE);
     setHistory(((await res.json()) as { data: Version[] }).data);
   }
+
+  const shownVersion = Math.max(initialVersion, base.version);
 
   return (
     <section className="flex flex-col gap-2 text-sm">
       <h2 className="text-base font-semibold">{title}</h2>
       {isTestText ? <p>{TEST_TEXT_MARKER}</p> : null}
+      {/* The form is hidden, not removed, while a conflict is on screen: the box keeps its text and is the focus target afterwards. */}
       {editable ? (
-        <form onSubmit={onSubmit} className="flex flex-col gap-2">
-          <textarea name="text" defaultValue={initialText} rows={8} maxLength={20000} className={`${fieldClass} h-auto py-2`} aria-label={title} onChange={(e) => setBoxHasText(e.target.value.trim().length > 0)} />
+        <form onSubmit={onSubmit} className={conflict ? "hidden" : "flex flex-col gap-2"}>
+          <textarea
+            ref={boxRef}
+            name="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={8}
+            maxLength={20000}
+            className={`${fieldClass} h-auto py-2`}
+            aria-label={title}
+          />
           <Button type="submit" disabled={pending}>
-            Save section
+            {pending ? "Saving…" : "Save section"}
           </Button>
         </form>
       ) : (
         <p className="whitespace-pre-wrap">{initialText || "—"}</p>
       )}
+      {conflict ? (
+        <div className="flex flex-col gap-3 rounded-md border border-zinc-400 p-3">
+          <h3 ref={headingRef} id={headingId} tabIndex={-1} className="font-semibold">
+            {CONFLICT_HEADING}
+          </h3>
+          <p>{CONFLICT_EXPLAIN}</p>
+          <div className="flex flex-col gap-1">
+            <h4 className="font-medium">{CONFLICT_MINE_LABEL}</h4>
+            <p className="whitespace-pre-wrap rounded-md border border-zinc-300 p-2">{conflict.mine || "—"}</p>
+          </div>
+          <div className="flex flex-col gap-1">
+            <h4 className="font-medium">{CONFLICT_THEIRS_LABEL}</h4>
+            <p>
+              {versionAttribution(conflict.theirs)}
+              {conflict.theirs.editedAt ? (
+                <>
+                  {" "}
+                  · <LocalTime iso={conflict.theirs.editedAt} />
+                </>
+              ) : null}{" "}
+              (version {conflict.theirs.version})
+            </p>
+            <p className="whitespace-pre-wrap rounded-md border border-zinc-300 p-2">{conflict.theirs.text || "—"}</p>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Button type="button" onClick={keepMine} disabled={pending}>
+              {pending ? "Saving…" : KEEP_MINE_BUTTON}
+            </Button>
+            <Button type="button" variant="outline" onClick={takeTheirs} disabled={pending}>
+              {TAKE_THEIRS_BUTTON}
+            </Button>
+            <Button type="button" variant="outline" onClick={cancelConflict} disabled={pending}>
+              {CANCEL_BUTTON}
+            </Button>
+          </div>
+        </div>
+      ) : null}
       {editedAt ? (
         <p>
           {versionAttribution({ editType, authorName })} · <LocalTime iso={editedAt} />
         </p>
       ) : null}
-      {editable && canGenerate ? <GenerateSectionButton reportId={reportId} sectionId={sectionId} boxHasText={boxHasText} /> : null}
+      {editable && canGenerate ? <GenerateSectionButton reportId={reportId} sectionId={sectionId} boxHasText={draft.trim().length > 0} /> : null}
       {message ? <p role="alert">{message}</p> : null}
-      {saved ? <p role="status">Saved as version {version}.</p> : null}
+      {note ? <p role="status">{note}</p> : null}
+      {saved ? <p role="status">Saved as version {base.version}.</p> : null}
       <button type="button" className="text-left underline" onClick={showHistory}>
-        Show history ({version} {version === 1 ? "version" : "versions"})
+        Show history ({shownVersion} {shownVersion === 1 ? "version" : "versions"})
       </button>
       {history ? (
         <ol className="flex flex-col gap-2">

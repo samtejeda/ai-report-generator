@@ -47,7 +47,7 @@ async function ReportDetail({ params }: { params: Promise<{ id: string }> }) {
       </Link>
       {report.sections.map((s) => (
         <SectionEditor
-          key={`${s.id}:${s.version}`}
+          key={s.id}
           reportId={report.id}
           sectionId={s.id}
           title={s.title}
