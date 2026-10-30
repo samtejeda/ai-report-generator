@@ -1,26 +1,34 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useRef, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth/client";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "@/lib/auth/config";
 import { changePasswordErrorMessage, validatePasswordChange } from "@/lib/auth/password-form";
-import { fieldClass } from "./auth-card";
+import { resetFormWhenHidden, useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
+import { PasswordField } from "./password-field";
 
 // Plain form on /account. It calls the existing POST /api/auth/change-password (through Better
 // Auth's client), which re-checks the current password, rate-limits, signs out other sessions on
 // request, emails a notice and writes the audit row. Nothing here is a gate; fixed messages only.
 export function ChangePasswordForm() {
   const router = useRouter();
-  const formRef = useRef<HTMLFormElement>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [pending, setPending] = useState(false);
 
+  // Next keeps this page alive and hidden and restores it: without this, "Your password was changed."
+  // and any typed password would still be there on return.
+  useResetWhenHidden(() => {
+    setMessage(null);
+    setDone(false);
+  });
+
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     const currentPassword = String(form.get("currentPassword") ?? "");
     const newPassword = String(form.get("newPassword") ?? "");
     const invalid = validatePasswordChange(currentPassword, newPassword, String(form.get("confirm") ?? ""));
@@ -36,26 +44,17 @@ export function ChangePasswordForm() {
     });
     setPending(false);
     if (error) return setMessage(changePasswordErrorMessage(error));
-    formRef.current?.reset();
+    formElement.reset();
     setDone(true);
     router.refresh();
   }
 
   return (
-    <form ref={formRef} onSubmit={onSubmit} className="flex flex-col gap-3 border-t border-zinc-200 pt-4">
+    <form ref={resetFormWhenHidden} onSubmit={onSubmit} className="flex flex-col gap-3 border-t border-zinc-200 pt-4">
       <h2 className="text-base font-semibold">Change password</h2>
-      <label className="flex flex-col gap-1 text-sm">
-        Current password
-        <input name="currentPassword" type="password" autoComplete="current-password" required className={fieldClass} />
-      </label>
-      <label className="flex flex-col gap-1 text-sm">
-        New password ({PASSWORD_MIN_LENGTH} to {PASSWORD_MAX_LENGTH} characters)
-        <input name="newPassword" type="password" autoComplete="new-password" required minLength={PASSWORD_MIN_LENGTH} maxLength={PASSWORD_MAX_LENGTH} className={fieldClass} />
-      </label>
-      <label className="flex flex-col gap-1 text-sm">
-        Repeat the new password
-        <input name="confirm" type="password" autoComplete="new-password" required className={fieldClass} />
-      </label>
+      <PasswordField label="Current password" name="currentPassword" autoComplete="current-password" />
+      <PasswordField label="New password" hint={`(${PASSWORD_MIN_LENGTH} to ${PASSWORD_MAX_LENGTH} characters)`} name="newPassword" autoComplete="new-password" minLength={PASSWORD_MIN_LENGTH} maxLength={PASSWORD_MAX_LENGTH} />
+      <PasswordField label="Repeat the new password" name="confirm" autoComplete="new-password" />
       <label className="flex items-start gap-2 text-sm">
         <input name="revokeOthers" type="checkbox" defaultChecked className="mt-1" />
         <span>Sign out my other sessions.</span>

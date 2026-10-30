@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { fieldClass } from "@/components/auth/auth-card";
 import { GenerateSectionButton } from "@/components/reports/generate-section-button";
 import { TEST_TEXT_MARKER } from "@/lib/reports/generate-messages";
+import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
 type Version = { id: string; version: number; editType: string; text: string; createdAt: string };
 
@@ -38,6 +39,12 @@ export function SectionEditor({
   const [saved, setSaved] = useState(false);
   const [pending, setPending] = useState(false);
   const [history, setHistory] = useState<Version[] | null>(null);
+  // Next keeps this page alive and hidden and restores it: drop stale "Saved as version N." and error
+  // lines. The text in the box is a draft and stays.
+  useResetWhenHidden(() => {
+    setMessage(null);
+    setSaved(false);
+  });
   const [boxHasText, setBoxHasText] = useState(initialText.trim().length > 0);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {

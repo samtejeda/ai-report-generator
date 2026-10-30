@@ -4,12 +4,14 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { PSYCHOED_TEMPLATE_SLUG } from "@/lib/reports/structure";
+import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
 // Owner or associate (the server refuses anyone else). Starts a draft report for this client.
 export function NewReportButton({ clientId }: { clientId: string }) {
   const router = useRouter();
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  useResetWhenHidden(() => setMessage(null));
 
   async function onClick() {
     setPending(true);

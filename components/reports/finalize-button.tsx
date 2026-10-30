@@ -3,12 +3,14 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
 // Shown only when the report is "generated"; the server refuses any other state with a 409.
 export function FinalizeButton({ reportId }: { reportId: string }) {
   const router = useRouter();
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  useResetWhenHidden(() => setMessage(null));
 
   async function onClick() {
     if (!window.confirm("Finalize this report? It cannot be edited afterwards.")) return;

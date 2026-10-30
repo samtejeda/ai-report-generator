@@ -1,26 +1,48 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth/client";
+import { SIGN_IN_PATH } from "@/lib/auth/landing";
+import { SIGN_OUT_FAILED } from "@/lib/auth/login-messages";
 
 export function SignOutButton() {
-  const router = useRouter();
   const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
   return (
-    <Button
-      variant="outline"
-      disabled={pending}
-      onClick={async () => {
-        setPending(true);
-        await authClient.signOut();
-        // refresh() empties the client router cache, so no page from the signed-in session survives.
-        router.replace("/login");
-        router.refresh();
-      }}
-    >
-      {pending ? "Signing out…" : "Sign out"}
-    </Button>
+    <div className="flex flex-col gap-2">
+      <Button
+        variant="outline"
+        disabled={pending}
+        onClick={async () => {
+          setPending(true);
+          setMessage(null);
+          let failed = false;
+          try {
+            const { error } = await authClient.signOut();
+            failed = Boolean(error);
+          } catch {
+            failed = true;
+          }
+          if (failed) {
+            // Still signed in: say so and stay, rather than look as if it worked.
+            setPending(false);
+            return setMessage(SIGN_OUT_FAILED);
+          }
+          // A full page load, not router.replace: Next keeps every page you leave alive and hidden
+          // and restores its state, so an in-app navigation would leave the signed-in session's
+          // pages (and any stuck "Signing out…") behind. A load drops all of them. The button stays
+          // "Signing out…" until the page is replaced.
+          window.location.assign(SIGN_IN_PATH);
+        }}
+      >
+        {pending ? "Signing out…" : "Sign out"}
+      </Button>
+      {message ? (
+        <p role="alert" className="text-sm">
+          {message}
+        </p>
+      ) : null}
+    </div>
   );
 }

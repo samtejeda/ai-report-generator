@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { callAdminApi } from "@/lib/admin/api-call";
 import { adminErrorMessage } from "@/lib/admin/messages";
+import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
 // Deactivate or reactivate one person. Shown only where the server's own rule would allow it;
 // the route checks again. Deactivation ends their sessions on their next request.
@@ -12,6 +13,7 @@ export function UserActiveButton({ userId, name, active }: { userId: string; nam
   const router = useRouter();
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  useResetWhenHidden(() => setMessage(null));
 
   async function onClick() {
     if (active && !window.confirm("Deactivate this person? They are signed out and cannot sign in until you reactivate them.")) return;

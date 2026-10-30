@@ -4,10 +4,14 @@ import Link from "next/link";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth/client";
+import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 import { fieldClass } from "./auth-card";
 
 export function ForgotPasswordForm() {
   const [state, setState] = useState<"idle" | "pending" | "sent" | "limited" | "failed">("idle");
+
+  // Next keeps this page alive and hidden and restores it: do not come back to "a link is on its way".
+  useResetWhenHidden(() => setState((s) => (s === "pending" ? s : "idle")));
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
