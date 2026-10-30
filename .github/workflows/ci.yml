@@ -5,8 +5,9 @@ on:
   push:
     branches: [main]
 
-# Read-only token. The required `checks` job needs no secrets and never touches Neon. Only the
-# separate, advisory `integration` job below holds a database secret (a CI-only Neon project).
+# Read-only token. The `checks` job needs no secrets and never touches Neon. Only the separate
+# `integration` job below holds a database secret (a CI-only Neon project). Both are required checks
+# on `main` (`integration` since 2026-10-27).
 permissions:
   contents: read
 

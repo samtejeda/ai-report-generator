@@ -18,6 +18,7 @@ next-env.d.ts
 *.log
 .vercel/
 coverage/
+.vitest/
 *.tsbuildinfo
 .neon
 
