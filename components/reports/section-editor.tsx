@@ -7,6 +7,9 @@ import { fieldClass } from "@/components/auth/auth-card";
 import { GenerateSectionButton } from "@/components/reports/generate-section-button";
 import { LocalTime } from "@/components/reports/local-time";
 import { TEST_TEXT_MARKER } from "@/lib/reports/generate-messages";
+import { reconcileDraft } from "@/lib/reports/draft";
+import { HISTORY_UNAVAILABLE, SAVE_FAILED, SAVE_INVALID } from "@/lib/reports/save-messages";
+import { saveSectionCall } from "@/lib/reports/save-section-call";
 import {
   CANCELLED_NOTE,
   CANCEL_BUTTON,
@@ -15,18 +18,17 @@ import {
   CONFLICT_HEADING,
   CONFLICT_MINE_LABEL,
   CONFLICT_THEIRS_LABEL,
-  HISTORY_UNAVAILABLE,
+  decideAfterRefusal,
   KEEP_MINE_BUTTON,
+  readCurrentSection,
   SAVE_CLOSED,
-  SAVE_FAILED,
   SAVE_GONE,
-  SAVE_INVALID,
   SAVE_UNCHANGED,
   SAVE_UNREADABLE,
   TAKE_THEIRS_BUTTON,
   TOOK_THEIRS_NOTE,
-} from "@/lib/reports/save-messages";
-import { decideAfterRefusal, readCurrentSection, reconcileDraft, saveSectionCall, type CurrentSection } from "@/lib/reports/save-section-call";
+  type CurrentSection,
+} from "@/lib/reports/section-conflict";
 import { versionAttribution } from "@/lib/reports/version-label";
 import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
