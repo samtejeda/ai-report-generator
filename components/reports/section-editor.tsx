@@ -4,10 +4,11 @@ import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { fieldClass } from "@/components/auth/auth-card";
+import { useRegisterUnsaved } from "@/components/unsaved/use-unsaved";
 import { GenerateSectionButton } from "@/components/reports/generate-section-button";
 import { LocalTime } from "@/components/reports/local-time";
 import { TEST_TEXT_MARKER } from "@/lib/reports/generate-messages";
-import { reconcileDraft } from "@/lib/reports/draft";
+import { isUnsaved, reconcileDraft } from "@/lib/reports/draft";
 import { HISTORY_UNAVAILABLE, SAVE_FAILED, SAVE_INVALID } from "@/lib/reports/save-messages";
 import { saveSectionCall } from "@/lib/reports/save-section-call";
 import {
@@ -29,6 +30,7 @@ import {
   TOOK_THEIRS_NOTE,
   type CurrentSection,
 } from "@/lib/reports/section-conflict";
+import { sectionBoxId, UNSAVED_LABEL } from "@/lib/reports/unsaved";
 import { versionAttribution } from "@/lib/reports/version-label";
 import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
@@ -49,6 +51,7 @@ export function SectionEditor({
   reportId,
   sectionId,
   title,
+  position,
   initialText,
   initialVersion,
   editable,
@@ -61,6 +64,8 @@ export function SectionEditor({
   reportId: string;
   sectionId: string;
   title: string;
+  /** The section's place in the report, so the unsaved list follows page order. */
+  position: number;
   /** The server's current text and version. When they change the box follows only if untouched. */
   initialText: string;
   initialVersion: number;
@@ -76,6 +81,7 @@ export function SectionEditor({
 }) {
   const router = useRouter();
   const headingId = useId();
+  const unsavedLabelId = useId();
   const boxRef = useRef<HTMLTextAreaElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const hadConflict = useRef(false);
@@ -109,6 +115,11 @@ export function SectionEditor({
     setDraft(next.draft);
     setBase(next.base);
   }
+
+  // A section is unsaved when its box differs from the last saved text. Cleared by a save, by taking
+  // the other version, and by putting the text back. Registered in an effect (see use-unsaved.ts).
+  const unsaved = editable && isUnsaved(draft, base.text);
+  useRegisterUnsaved({ key: sectionId, title, position }, unsaved);
 
   // Move focus to the conflict when it appears and back to the box when it goes.
   useEffect(() => {
@@ -208,13 +219,22 @@ export function SectionEditor({
 
   return (
     <section className="flex flex-col gap-2 text-sm">
-      <h2 className="text-base font-semibold">{title}</h2>
+      <div className="flex flex-wrap items-baseline gap-x-3">
+        <h2 className="text-base font-semibold">{title}</h2>
+        {unsaved ? (
+          <span id={unsavedLabelId} className="font-medium text-red-700">
+            {UNSAVED_LABEL}
+          </span>
+        ) : null}
+      </div>
       {isTestText ? <p>{TEST_TEXT_MARKER}</p> : null}
       {/* The form is hidden, not removed, while a conflict is on screen: the box keeps its text and is the focus target afterwards. */}
       {editable ? (
         <form onSubmit={onSubmit} className={conflict ? "hidden" : "flex flex-col gap-2"}>
           <textarea
             ref={boxRef}
+            id={sectionBoxId(sectionId)}
+            aria-describedby={unsaved ? unsavedLabelId : undefined}
             name="text"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}

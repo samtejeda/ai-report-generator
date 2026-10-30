@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { FinalizeButton } from "@/components/reports/finalize-button";
 import { LocalTime } from "@/components/reports/local-time";
+import { UnsavedSummary } from "@/components/unsaved/unsaved-summary";
 import { SectionEditor } from "@/components/reports/section-editor";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/guard";
@@ -31,6 +32,7 @@ async function ReportDetail({ params }: { params: Promise<{ id: string }> }) {
   const editable = canWrite && isEditable(report.status);
   return (
     <>
+      <UnsavedSummary />
       <p className="text-sm">
         Status: <strong>{report.status}</strong>
         {report.finalizedAt ? (
@@ -51,6 +53,7 @@ async function ReportDetail({ params }: { params: Promise<{ id: string }> }) {
           reportId={report.id}
           sectionId={s.id}
           title={s.title}
+          position={s.position}
           initialText={s.text}
           initialVersion={s.version}
           editable={editable}
