@@ -4,24 +4,37 @@ import Link from "next/link";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth/client";
+import { captureWait, tooManyAttemptsMessage } from "@/lib/auth/rate-limit-wait";
 import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 import { fieldClass } from "./auth-card";
 
 export function ForgotPasswordForm() {
   const [state, setState] = useState<"idle" | "pending" | "sent" | "limited" | "failed">("idle");
+  // Seconds from the 429's X-Retry-After header; null keeps this form's own generic sentence.
+  const [waitSeconds, setWaitSeconds] = useState<number | null>(null);
 
   // Next keeps this page alive and hidden and restores it: do not come back to "a link is on its way".
-  useResetWhenHidden(() => setState((s) => (s === "pending" ? s : "idle")));
+  useResetWhenHidden(() => {
+    setState((s) => (s === "pending" ? s : "idle"));
+    setWaitSeconds(null);
+  });
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     setState("pending");
-    const { error } = await authClient.requestPasswordReset({
-      email: String(form.get("email") ?? ""),
-      redirectTo: "/reset-password",
-    });
-    if (error?.status === 429) setState("limited");
+    const wait = captureWait();
+    const { error } = await authClient.requestPasswordReset(
+      {
+        email: String(form.get("email") ?? ""),
+        redirectTo: "/reset-password",
+      },
+      wait.fetchOptions,
+    );
+    if (error?.status === 429) {
+      setWaitSeconds(wait.seconds());
+      setState("limited");
+    }
     else if (error) setState("failed");
     // The same answer whether or not the address has an account.
     else setState("sent");
@@ -46,7 +59,7 @@ export function ForgotPasswordForm() {
       </label>
       {state === "limited" ? (
         <p role="alert" className="text-sm text-red-700">
-          Too many requests. Wait a few minutes and try again.
+          {tooManyAttemptsMessage(waitSeconds, "Too many requests. Wait a few minutes and try again.")}
         </p>
       ) : null}
       {state === "failed" ? (

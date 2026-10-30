@@ -5,6 +5,7 @@ import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth/client";
 import { HOME_PATH } from "@/lib/auth/landing";
+import { captureWait, tooManyAttemptsMessage } from "@/lib/auth/rate-limit-wait";
 import { resetFormWhenHidden, useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 import { fieldClass } from "./auth-card";
 import { PasswordField } from "./password-field";
@@ -44,10 +45,11 @@ export function MfaSetup() {
     const password = String(new FormData(event.currentTarget).get("password") ?? "");
     setPending(true);
     setMessage(null);
-    const { data, error } = await authClient.twoFactor.enable({ password, method: "totp" });
+    const wait = captureWait();
+    const { data, error } = await authClient.twoFactor.enable({ password, method: "totp" }, wait.fetchOptions);
     setPending(false);
     if (error || !data || !("totpURI" in data)) {
-      setMessage(error?.status === 429 ? "Too many attempts. Wait a few minutes and try again." : "Could not start setup. Check your password.");
+      setMessage(error?.status === 429 ? tooManyAttemptsMessage(wait.seconds()) : "Could not start setup. Check your password.");
       return;
     }
     setSetupKey(secretFrom(data.totpURI));
@@ -60,10 +62,12 @@ export function MfaSetup() {
     const code = String(new FormData(event.currentTarget).get("code") ?? "").trim();
     setPending(true);
     setMessage(null);
-    const { error } = await authClient.twoFactor.verifyTotp({ code });
+    const wait = captureWait();
+    const { error } = await authClient.twoFactor.verifyTotp({ code }, wait.fetchOptions);
     setPending(false);
     if (error) {
-      setMessage("That code is not right. Check the time on your phone and try again.");
+      // A 429 is not a wrong code: say so (this step used to call every refusal "not right").
+      setMessage(error.status === 429 ? tooManyAttemptsMessage(wait.seconds()) : "That code is not right. Check the time on your phone and try again.");
       return;
     }
     setStep("codes");

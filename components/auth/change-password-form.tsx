@@ -5,6 +5,7 @@ import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth/client";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "@/lib/auth/config";
+import { captureWait } from "@/lib/auth/rate-limit-wait";
 import { changePasswordErrorMessage, validatePasswordChange } from "@/lib/auth/password-form";
 import { resetFormWhenHidden, useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 import { PasswordField } from "./password-field";
@@ -37,13 +38,17 @@ export function ChangePasswordForm() {
 
     setPending(true);
     setMessage(null);
-    const { error } = await authClient.changePassword({
-      currentPassword,
-      newPassword,
-      revokeOtherSessions: form.get("revokeOthers") === "on",
-    });
+    const wait = captureWait();
+    const { error } = await authClient.changePassword(
+      {
+        currentPassword,
+        newPassword,
+        revokeOtherSessions: form.get("revokeOthers") === "on",
+      },
+      wait.fetchOptions,
+    );
     setPending(false);
-    if (error) return setMessage(changePasswordErrorMessage(error));
+    if (error) return setMessage(changePasswordErrorMessage(error, wait.seconds()));
     formElement.reset();
     setDone(true);
     router.refresh();

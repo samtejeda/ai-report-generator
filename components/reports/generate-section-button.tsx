@@ -17,9 +17,10 @@ import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
 // "Generate test text" for one empty prose section. The server decides everything (role, status,
 // that the section is empty, the practice's endpoint, the limits); this only asks and reports.
-// Success is a page refresh: the report becomes `generated`, the section's key changes with its
-// version, and the editor remounts with the stored text. `boxHasText` disables the button because
-// that refresh would silently throw away text typed but not saved (audit 01 item 7).
+// Success is a page refresh: the report becomes `generated` and the editor follows the stored text
+// because its box is empty (an untouched box follows the server; reconcileDraft in
+// lib/reports/save-section-call.ts). `boxHasText` still disables the button: Generate fills an
+// empty section only, and text typed but not saved must never be mistaken for one.
 export function GenerateSectionButton({ reportId, sectionId, boxHasText }: { reportId: string; sectionId: string; boxHasText: boolean }) {
   const router = useRouter();
   const [running, setRunning] = useState(false);

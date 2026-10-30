@@ -1,4 +1,5 @@
-import { TOO_MANY_ATTEMPTS, type AuthError } from "./login-messages";
+import type { AuthError } from "./login-messages";
+import { tooManyAttemptsMessage } from "./rate-limit-wait";
 
 /**
  * The "Make new backup codes" section of /account: its fixed sentences and small checks. The server
@@ -17,8 +18,8 @@ export function validateBackupCodesPassword(password: string): string | null {
   return password.length === 0 ? "Enter your current password." : null;
 }
 
-export function backupCodesErrorMessage(error: AuthError): string {
-  if (error?.status === 429) return TOO_MANY_ATTEMPTS;
+export function backupCodesErrorMessage(error: AuthError, waitSeconds: number | null = null): string {
+  if (error?.status === 429) return tooManyAttemptsMessage(waitSeconds);
   if (error?.status === 401) return "Your session ended. Sign in again.";
   if (error?.code === "INVALID_PASSWORD") return "Your password is not correct.";
   return "Could not make new backup codes. Try again.";
