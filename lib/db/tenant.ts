@@ -39,9 +39,12 @@ export const UPDATABLE_TABLES = [...SOFT_DELETE_TABLES, s.reportSections, s.jobs
 export const INSERT_ONLY_TABLES = [s.methodologyPrompts, s.reportVersions, s.auditLog] as const;
 // Derived / regenerable data the app may hard-delete (re-indexing replaces chunks).
 export const DERIVED_DELETABLE_TABLES = [s.ragDocuments, s.ragChunks, s.ragEmbeddings, s.jobs] as const;
+// Written only by countRead() below (one atomic upsert), never by the generic helpers.
+export const COUNTER_TABLES = [s.readLimitCounters] as const;
 export const TENANT_TABLES = [
   ...UPDATABLE_TABLES,
   ...INSERT_ONLY_TABLES,
+  ...COUNTER_TABLES,
   s.ragChunks,
   s.ragEmbeddings,
 ] as const;
@@ -59,6 +62,11 @@ type UpdateRow<T extends { $inferInsert: object }> = Partial<Omit<T["$inferInser
 export type TenantQuery<R> = PromiseLike<R> & { toSQL(): { sql: string; params: unknown[] } };
 
 export type FindOptions = {
+  /**
+   * Read only these columns (property names, as on the returned row type) instead of the whole
+   * row, e.g. to leave a large text column unread. Rows come back as just those keys.
+   */
+  columns?: readonly string[];
   where?: SQL;
   orderBy?: SQL | SQL[];
   /** Required: every list is paginated (max MAX_PAGE_SIZE). */
@@ -143,20 +151,32 @@ export function tenantDb(ctx: TenantContext, db: Db = getDb()) {
     return {
       organizationId: orgId,
 
-      find<T extends TenantTable>(table: T, opts: FindOptions): TenantQuery<Row<T>[]> {
+      find<T extends TenantTable, K extends keyof Row<T> & string = never>(
+        table: T,
+        opts: FindOptions & { columns?: readonly K[] },
+      ): TenantQuery<([K] extends [never] ? Row<T> : Pick<Row<T>, K>)[]> {
         if (!Number.isInteger(opts.limit) || opts.limit < 1 || opts.limit > MAX_PAGE_SIZE) {
           throw new Error(`limit must be an integer between 1 and ${MAX_PAGE_SIZE}`);
         }
+        let projection: Record<string, PgColumn> | undefined;
+        if (opts.columns) {
+          const all = cols(table);
+          if (opts.columns.length === 0) throw new Error("columns must not be empty");
+          projection = {};
+          for (const name of opts.columns) {
+            if (!(name in all) || typeof all[name] !== "object") throw new Error(`unknown column ${name}`);
+            projection[name] = all[name];
+          }
+        }
         return run((e) => {
-          let q = e
-            .select()
+          let q = (projection ? e.select(projection) : e.select())
             .from(table as PgTable)
             .where(scope(table, [opts.where], opts.includeDeleted))
             .$dynamic()
             .limit(opts.limit);
           if (opts.offset) q = q.offset(opts.offset);
           if (opts.orderBy) q = q.orderBy(...(Array.isArray(opts.orderBy) ? opts.orderBy : [opts.orderBy]));
-          return q as unknown as TenantQuery<Row<T>[]>;
+          return q as unknown as TenantQuery<([K] extends [never] ? Row<T> : Pick<Row<T>, K>)[]>;
         });
       },
 
@@ -249,6 +269,35 @@ export function tenantDb(ctx: TenantContext, db: Db = getDb()) {
         if (standalone) throw new Error("lock() needs a transaction");
         if (!/^[a-z_]{1,40}$/.test(name)) throw new Error("lock name must be 1 to 40 lower-case letters or underscores");
         await exec.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`${orgId}:${name}`}, 0))`);
+      },
+
+      // REMOVABLE (Sam, PROGRESS.md decision 15): this method exists only for the per-person limit on
+      // GET /api/reports/{id}/state and has no other caller. If that check is removed, delete it with the
+      // read_limit_counters table (a NEW migration drops the table; see the REMOVABLE note in
+      // lib/db/schema/read-limit-counters.ts), COUNTER_TABLES above, and the countRead tests in
+      // lib/db/tenant.test.ts. If another limited read is added first, keep it and add a key instead.
+      /**
+       * Counts one call by one person against a per-minute limit and says where they stand. One
+       * atomic statement (insert, or add one in the same minute, or restart at one in a new
+       * minute; the minute is the database's, so servers' clocks do not matter) on the person's
+       * single row for this key. The count stops at limit + 1, so a flood cannot grow it. Only
+       * meaningful inside `transaction()`. The user id is validated and the key is from a closed
+       * list; neither comes from request input. Writes no audit row (see GET /api/reports/{id}/state).
+       */
+      async countRead(userId: string, key: s.ReadLimitKey, limit: number): Promise<{ count: number; secondsLeft: number }> {
+        if (standalone) throw new Error("countRead() needs a transaction");
+        assertUuid(userId, "userId");
+        if (!(s.READ_LIMIT_KEYS as readonly string[]).includes(key)) throw new Error("unknown read limit key");
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100_000) throw new Error("limit must be a positive integer");
+        const result = await exec.execute(sql`
+          insert into read_limit_counters as c (organization_id, user_id, key, window_start, count)
+          values (${orgId}, ${userId}, ${key}, date_trunc('minute', now()), 1)
+          on conflict (organization_id, user_id, key) do update
+            set count = case when c.window_start = excluded.window_start then least(c.count + 1, ${limit + 1}) else 1 end,
+                window_start = excluded.window_start
+          returning count, extract(epoch from (window_start + interval '1 minute' - now()))::float8 as seconds_left`);
+        const row = result.rows[0] as { count: number; seconds_left: number };
+        return { count: Number(row.count), secondsLeft: Math.max(1, Math.ceil(Number(row.seconds_left))) };
       },
 
       /** The caller's own organization row. */

@@ -136,6 +136,7 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
     await t.update(schema.reportTemplates, tpl.id, { activeMethodologyPromptId: p1.id });
     const sub = await seedClientSubtree(org.id, user.id, tpl.id, p1.id, `${label}-1`);
     const [client2] = await t.insert(schema.clients, { displayName: `Synthetic ${label}-2` });
+    await t.insert(schema.readLimitCounters, { userId: user.id, key: "report_state", windowStart: new Date(), count: 1 });
     const [version] = await owner.select().from(schema.reportVersions).where(eq(schema.reportVersions.reportId, sub.reportId)).limit(1);
     return {
       orgId: org.id, userId: user.id, templateId: tpl.id, template2Id: tpl2.id, promptId: p1.id, prompt2Id: p2.id,
@@ -845,6 +846,86 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
         c1.release();
         c2.release();
       }
+    });
+  });
+
+  describe("per-person read counter (feat/report-state-check; migration 0014)", () => {
+    const LIMIT = 3;
+    const inTx = <R>(orgId: string, fn: (t: Parameters<Parameters<ReturnType<typeof tenantDb>["transaction"]>[0]>[0]) => Promise<R>) =>
+      tenantDb({ organizationId: orgId }, app).transaction(fn);
+    const hit = (orgId: string, userId: string, limit = LIMIT) => inTx(orgId, (t) => t.countRead(userId, "report_state", limit));
+    async function person(orgId: string, label: string): Promise<string> {
+      const [u] = await owner.insert(schema.users).values({ organizationId: orgId, email: `counter-${label}-${crypto.randomUUID()}@example.test`, displayName: `Synthetic ${label}`, role: "associate" }).returning();
+      return u.id;
+    }
+
+    /** Waits (by the database clock) until at least `seconds` remain in the current minute, so a count cannot straddle a boundary. */
+    async function roomInMinute(seconds: number) {
+      const left = async () => Number((await owner.execute(sql`select extract(epoch from (date_trunc('minute', now()) + interval '1 minute' - now()))::float8 as s`)).rows[0].s);
+      const wait = await left();
+      if (wait < seconds) await new Promise((r) => setTimeout(r, (wait + 0.5) * 1000));
+    }
+
+    it("counts up inside a minute, stops growing at limit + 1, and says how long is left", async () => {
+      await roomInMinute(15);
+      const u = await person(A.orgId, "ladder");
+      const seen: number[] = [];
+      let left = 0;
+      for (let i = 0; i < 6; i++) {
+        const r = await hit(A.orgId, u);
+        seen.push(r.count);
+        left = r.secondsLeft;
+      }
+      expect(seen).toEqual([1, 2, 3, 4, 4, 4]);
+      expect(left).toBeGreaterThanOrEqual(1);
+      expect(left).toBeLessThanOrEqual(60);
+      const rows = await owner.select().from(schema.readLimitCounters).where(eq(schema.readLimitCounters.userId, u));
+      expect(rows).toHaveLength(1); // one row per person and key, however many calls
+    });
+
+    it("a new minute starts again at one", async () => {
+      const u = await person(A.orgId, "rollover");
+      await hit(A.orgId, u);
+      await hit(A.orgId, u);
+      await owner.execute(sql`update read_limit_counters set window_start = window_start - interval '2 minutes' where user_id = ${u}`);
+      expect((await hit(A.orgId, u)).count).toBe(1);
+    });
+
+    it("another person's count, and the same count in another practice, are separate", async () => {
+      await roomInMinute(15);
+      const a1 = await person(A.orgId, "sep-1");
+      const a2 = await person(A.orgId, "sep-2");
+      await hit(A.orgId, a1);
+      await hit(A.orgId, a1);
+      expect((await hit(A.orgId, a1)).count).toBe(3);
+      expect((await hit(A.orgId, a2)).count).toBe(1);
+      // B's fixture user already has a row (count 1 at seed); A's person has none in B, and B cannot count A's person at all.
+      await expectPgError(hit(B.orgId, a1), FK_VIOLATION);
+    });
+
+    it("parallel calls by one person are counted exactly (each sees a different number)", async () => {
+      await roomInMinute(15);
+      const u = await person(A.orgId, "parallel");
+      const results = await Promise.all(Array.from({ length: 12 }, () => hit(A.orgId, u, 1000)));
+      expect(results.map((r) => r.count).sort((x, y) => x - y)).toEqual(Array.from({ length: 12 }, (_, i) => i + 1));
+    });
+
+    it("refuses a standalone call, a bad user id, a key off the list and a silly limit", async () => {
+      const u = await person(A.orgId, "refusals");
+      await expect(tenantDb({ organizationId: A.orgId }, app).countRead(u, "report_state", LIMIT)).rejects.toThrow(/needs a transaction/);
+      await expect(inTx(A.orgId, (t) => t.countRead("nope", "report_state", LIMIT))).rejects.toThrow(/UUID/);
+      await expect(inTx(A.orgId, (t) => t.countRead(u, "other" as never, LIMIT))).rejects.toThrow(/unknown read limit key/);
+      for (const bad of [0, -1, 1.5, 1_000_000]) await expect(inTx(A.orgId, (t) => t.countRead(u, "report_state", bad))).rejects.toThrow(/limit must be/);
+    });
+
+    it("the app role cannot delete rows, re-point them, or invent a key; the table refuses a bad key and a negative count", async () => {
+      const u = await person(A.orgId, "privileges");
+      await hit(A.orgId, u);
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`delete from read_limit_counters where user_id = ${u}`)), INSUFFICIENT_PRIVILEGE);
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update read_limit_counters set user_id = ${A.userId} where user_id = ${u}`)), INSUFFICIENT_PRIVILEGE);
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update read_limit_counters set key = 'report_state' where user_id = ${u}`)), INSUFFICIENT_PRIVILEGE);
+      await expectPgError(owner.execute(sql`update read_limit_counters set count = -1 where user_id = ${u}`), CHECK_VIOLATION);
+      await expectPgError(owner.execute(sql`insert into read_limit_counters (organization_id, user_id, key, window_start) values (${A.orgId}, ${u}, 'something_else', now())`), CHECK_VIOLATION);
     });
   });
 });
