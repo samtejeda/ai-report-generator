@@ -5,7 +5,7 @@ import { and, eq } from "drizzle-orm";
 import * as schema from "./schema";
 import type { SessionContext } from "@/lib/auth/session";
 import { REPORT_WRITE_ROLES } from "@/lib/auth/permissions";
-import { reportVisibilityFilter } from "./report-access";
+import { authorNames, reportVisibilityFilter, type SectionView, type VersionView } from "./report-access";
 import { createReport, finalizeReport, saveSection } from "./report-write";
 import { tenantDb } from "./tenant";
 
@@ -64,5 +64,47 @@ describe("who may write", () => {
       ["app/api/reports/[id]/route.ts", "GET"],
       ["app/api/reports/[id]/sections/[sectionId]/versions/route.ts", "GET"],
     ] as const) expect(roles(file, method)).toEqual(["owner", "associate", "admin"]);
+  });
+});
+
+describe("author names", () => {
+  const A = "44444444-4444-4444-8444-444444444444";
+  const B = "55555555-5555-4555-8555-555555555555";
+  type FindArgs = Parameters<ReturnType<typeof tenantDb>["find"]>;
+  const spy = (rows: { id: string; displayName: string }[] = []) => {
+    const calls: FindArgs[] = [];
+    const t = { find: ((...args: FindArgs) => (calls.push(args), Promise.resolve(rows))) as unknown as ReturnType<typeof tenantDb>["find"] };
+    return { t, calls };
+  };
+
+  it("asks once, for the distinct ids only, in the practice, and keeps deactivated people", async () => {
+    const { t, calls } = spy([{ id: A, displayName: "Synthetic A" }, { id: B, displayName: "Synthetic B" }]);
+    const names = await authorNames(t, [{ createdByUserId: A }, { createdByUserId: B }, { createdByUserId: A }, { createdByUserId: null }]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe(schema.users);
+    expect(calls[0][1].includeDeleted).toBe(true);
+    expect(names.get(A)).toBe("Synthetic A");
+    // The statement a real tenantDb builds from those options: practice filter, only the two ids, soft-deleted rows not hidden.
+    const q = tenantDb({ organizationId: ORG }, mock).find(schema.users, calls[0][1]).toSQL();
+    expect(q.sql).toContain('"users"."organization_id" = $1');
+    expect(q.sql).toContain('"users"."id" in (');
+    expect(q.sql).not.toContain('"users"."deleted_at" is null');
+    expect(q.params).toEqual(expect.arrayContaining([ORG, A, B]));
+    expect(q.params.filter((p) => p === A)).toHaveLength(1);
+  });
+
+  it("asks nothing when no version has an author (model text only)", async () => {
+    const { t, calls } = spy();
+    expect(await authorNames(t, [{ createdByUserId: null }])).toEqual(new Map());
+    expect(await authorNames(t, [])).toEqual(new Map());
+    expect(calls).toHaveLength(0);
+  });
+
+  it("the views carry a display name and no id, email or role of the author", () => {
+    const keys = (o: Record<string, unknown>) => Object.keys(o).sort();
+    const version: VersionView = { id: "x", version: 1, editType: "human_edit", text: "", createdAt: "", authorName: null };
+    const section: SectionView = { id: "x", key: "", title: "", type: "prose", position: 1, text: "", version: 0, editType: null, editedAt: null, authorName: null };
+    expect(keys(version)).toEqual(["authorName", "createdAt", "editType", "id", "text", "version"]);
+    expect(keys(section)).toEqual(["authorName", "editType", "editedAt", "id", "key", "position", "text", "title", "type", "version"]);
   });
 });
