@@ -1,52 +1,38 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useCallback, useId, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { fieldClass } from "@/components/auth/auth-card";
+import { useRegisterUnsaved } from "@/components/unsaved/use-unsaved";
 import { GenerateSectionButton } from "@/components/reports/generate-section-button";
 import { LocalTime } from "@/components/reports/local-time";
+import { SectionConflictNotice } from "@/components/reports/section-conflict-notice"; // REMOVABLE (see use-section-conflict.ts)
+import { useSectionConflict } from "@/components/reports/use-section-conflict"; // REMOVABLE
 import { TEST_TEXT_MARKER } from "@/lib/reports/generate-messages";
-import {
-  CANCELLED_NOTE,
-  CANCEL_BUTTON,
-  CONFLICT_AGAIN,
-  CONFLICT_EXPLAIN,
-  CONFLICT_HEADING,
-  CONFLICT_MINE_LABEL,
-  CONFLICT_THEIRS_LABEL,
-  HISTORY_UNAVAILABLE,
-  KEEP_MINE_BUTTON,
-  SAVE_CLOSED,
-  SAVE_FAILED,
-  SAVE_GONE,
-  SAVE_INVALID,
-  SAVE_UNCHANGED,
-  SAVE_UNREADABLE,
-  TAKE_THEIRS_BUTTON,
-  TOOK_THEIRS_NOTE,
-} from "@/lib/reports/save-messages";
-import { decideAfterRefusal, readCurrentSection, reconcileDraft, saveSectionCall, type CurrentSection } from "@/lib/reports/save-section-call";
+import { isUnsaved, reconcileDraft } from "@/lib/reports/draft";
+import { HISTORY_UNAVAILABLE, SAVE_FAILED, SAVE_INVALID } from "@/lib/reports/save-messages";
+import { saveSectionCall } from "@/lib/reports/save-section-call";
+import { sectionBoxId, UNSAVED_LABEL } from "@/lib/reports/unsaved";
 import { versionAttribution } from "@/lib/reports/version-label";
 import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 
 type Version = { id: string; version: number; editType: string; text: string; createdAt: string; authorName: string | null };
 
-/** A save the server refused because somebody saved first: their text, and the person's own. */
-type Conflict = { theirs: CurrentSection; mine: string };
-
 // One section of a report: a text box, Save, and the section's history.
 //
-// Save sends the version the text was loaded from (`base`). If somebody saved first the server
-// answers 409 and nothing is overwritten; this component then reads the newer text and shows it
-// beside the person's own with three buttons, and nothing is replaced without a click. The text in
-// the box is a draft held in state: it is never replaced by a newer server copy unless the box is
-// untouched (reconcileDraft), so another section's save, a refresh or a colleague's edit cannot
-// wipe it (audit 01 item 7). The server re-checks every save; none of this is a gate.
+// The box is a draft held in state. Save sends the version the draft was based on (`base`); if
+// somebody saved first the server answers 409 and nothing is overwritten (what the page then shows
+// is the REMOVABLE conflict notice). The draft is never replaced by a newer server copy unless the
+// box is untouched (reconcileDraft), so another section's save, a refresh or a colleague's edit
+// cannot wipe it, and it is not reset when Next hides the page. A section whose box differs from
+// the last saved text is "unsaved": it is labelled, listed at the top of the page and guarded
+// against leaving (components/unsaved). The server re-checks every save; none of this is a gate.
 export function SectionEditor({
   reportId,
   sectionId,
   title,
+  position,
   initialText,
   initialVersion,
   editable,
@@ -59,6 +45,8 @@ export function SectionEditor({
   reportId: string;
   sectionId: string;
   title: string;
+  /** The section's place in the report, so the unsaved list follows page order. */
+  position: number;
   /** The server's current text and version. When they change the box follows only if untouched. */
   initialText: string;
   initialVersion: number;
@@ -73,10 +61,8 @@ export function SectionEditor({
   editedAt: string | null;
 }) {
   const router = useRouter();
-  const headingId = useId();
+  const unsavedLabelId = useId();
   const boxRef = useRef<HTMLTextAreaElement>(null);
-  const headingRef = useRef<HTMLHeadingElement>(null);
-  const hadConflict = useRef(false);
 
   // The draft in the box, and the version and text it was written against.
   const [draft, setDraft] = useState(initialText);
@@ -86,21 +72,50 @@ export function SectionEditor({
   const [note, setNote] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [pending, setPending] = useState(false);
-  const [conflict, setConflict] = useState<Conflict | null>(null);
   const [history, setHistory] = useState<Version[] | null>(null);
 
-  // Next keeps this page alive and hidden and restores it: drop stale "Saved as version N." lines,
-  // errors, and the other person's text. The draft in the box stays.
+  // Next keeps this page alive and hidden and restores it: drop stale "Saved as version N." lines
+  // and errors. The draft in the box stays; it is not a message.
   useResetWhenHidden(() => {
     setMessage(null);
     setNote(null);
     setSaved(false);
-    setConflict(null);
   });
 
+  /** A save went through (here, or from the conflict notice). */
+  function afterSaved(version: number, text: string) {
+    setBase({ version, text });
+    setDraft(text);
+    setSaved(true);
+    setHistory(null);
+    router.refresh();
+  }
+
+  // REMOVABLE block 1 of 4: the conflict state and handlers.
+  const focusBox = useCallback(() => boxRef.current?.focus(), []);
+  const conflict = useSectionConflict({
+    reportId,
+    sectionId,
+    getDraft: () => draft,
+    onSaved: afterSaved,
+    onTookTheirs: (theirs) => {
+      setDraft(theirs.text);
+      setBase({ version: theirs.version, text: theirs.text });
+      setHistory(null);
+      // Brings the section's line (author, time) and the page's other state up to date.
+      router.refresh();
+    },
+    report: setMessage,
+    note: setNote,
+    setBusy: setPending,
+    focusBox,
+  });
+  const conflictOpen = conflict.open; // REMOVABLE (without the feature this is `false`)
+
   // The server's copy changed (a refresh after this or another section's save, a generation, a
-  // colleague). While a conflict is on screen nothing is adopted; it is settled when it closes.
-  if (!conflict && (seen.initialText !== initialText || seen.initialVersion !== initialVersion)) {
+  // colleague). The box follows only if untouched. REMOVABLE block 2 of 4: while the conflict
+  // notice is open nothing is adopted; it is settled when the notice closes.
+  if (!conflictOpen && (seen.initialText !== initialText || seen.initialVersion !== initialVersion)) {
     setSeen({ initialText, initialVersion });
     if (seen.initialVersion !== initialVersion) setHistory(null);
     const next = reconcileDraft({ draft, base }, { version: initialVersion, text: initialText });
@@ -108,92 +123,23 @@ export function SectionEditor({
     setBase(next.base);
   }
 
-  // Move focus to the conflict when it appears and back to the box when it goes.
-  useEffect(() => {
-    if (conflict) {
-      hadConflict.current = true;
-      headingRef.current?.focus();
-    } else if (hadConflict.current) {
-      hadConflict.current = false;
-      boxRef.current?.focus();
-    }
-  }, [conflict]);
-
-  /** The server refused with 409: find out whether a colleague saved first or the report closed. */
-  async function afterRefusal(mine: string, sentBase: number, again: boolean) {
-    const outcome = decideAfterRefusal(await readCurrentSection(reportId, sectionId), sentBase);
-    switch (outcome.kind) {
-      case "newer":
-        setConflict({ theirs: outcome.theirs, mine });
-        return setMessage(again ? CONFLICT_AGAIN : null);
-      case "closed":
-        setConflict(null);
-        return setMessage(SAVE_CLOSED);
-      case "gone":
-        setConflict(null);
-        return setMessage(SAVE_GONE);
-      case "unreadable":
-        setConflict(null);
-        return setMessage(SAVE_UNREADABLE);
-      case "unchanged":
-        setConflict(null);
-        return setMessage(SAVE_UNCHANGED);
-    }
-  }
-
-  function afterSaved(version: number, text: string) {
-    setBase({ version, text });
-    setDraft(text);
-    setConflict(null);
-    setSaved(true);
-    setHistory(null);
-    router.refresh();
-  }
+  // A section is unsaved when its box differs from the last saved text. Cleared by a save, by "Use
+  // theirs instead", and by putting the text back. Registered in an effect (see use-unsaved.ts).
+  const unsaved = editable && isUnsaved(draft, base.text);
+  useRegisterUnsaved({ key: sectionId, title, position }, unsaved);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const mine = draft;
     setPending(true);
     setMessage(null);
     setNote(null);
     setSaved(false);
-    const result = await saveSectionCall(reportId, sectionId, mine, base.version);
-    if (result.ok) afterSaved(result.version, mine);
-    else if (result.kind === "refused") await afterRefusal(mine, base.version, false);
+    const result = await saveSectionCall(reportId, sectionId, draft, base.version);
+    if (result.ok) afterSaved(result.version, draft);
+    // REMOVABLE block 3 of 4: a 409 is explained by the conflict notice. Without it: setMessage(SAVE_FAILED).
+    else if (result.kind === "refused") await conflict.handleRefusal(base.version);
     else setMessage(result.kind === "invalid" ? SAVE_INVALID : SAVE_FAILED);
     setPending(false);
-  }
-
-  async function keepMine() {
-    if (!conflict) return;
-    const { mine, theirs } = conflict;
-    setPending(true);
-    setMessage(null);
-    const result = await saveSectionCall(reportId, sectionId, mine, theirs.version);
-    if (result.ok) afterSaved(result.version, mine);
-    else if (result.kind === "refused") await afterRefusal(mine, theirs.version, true);
-    // Any other failure leaves the panel up so the choice is still there to make.
-    else setMessage(result.kind === "invalid" ? SAVE_INVALID : SAVE_FAILED);
-    setPending(false);
-  }
-
-  function takeTheirs() {
-    if (!conflict) return;
-    const { theirs } = conflict;
-    setDraft(theirs.text);
-    setBase({ version: theirs.version, text: theirs.text });
-    setConflict(null);
-    setMessage(null);
-    setNote(TOOK_THEIRS_NOTE);
-    setHistory(null);
-    // Brings the section's line (author, time) and the page's other state up to date.
-    router.refresh();
-  }
-
-  function cancelConflict() {
-    setConflict(null);
-    setMessage(null);
-    setNote(CANCELLED_NOTE);
   }
 
   async function showHistory() {
@@ -206,13 +152,21 @@ export function SectionEditor({
 
   return (
     <section className="flex flex-col gap-2 text-sm">
-      <h2 className="text-base font-semibold">{title}</h2>
+      <div className="flex flex-wrap items-baseline gap-x-3">
+        <h2 className="text-base font-semibold">{title}</h2>
+        {unsaved ? (
+          <span id={unsavedLabelId} className="font-medium text-red-700">
+            {UNSAVED_LABEL}
+          </span>
+        ) : null}
+      </div>
       {isTestText ? <p>{TEST_TEXT_MARKER}</p> : null}
-      {/* The form is hidden, not removed, while a conflict is on screen: the box keeps its text and is the focus target afterwards. */}
       {editable ? (
-        <form onSubmit={onSubmit} className={conflict ? "hidden" : "flex flex-col gap-2"}>
+        <form onSubmit={onSubmit} className="flex flex-col gap-2">
           <textarea
             ref={boxRef}
+            id={sectionBoxId(sectionId)}
+            aria-describedby={unsaved ? unsavedLabelId : undefined}
             name="text"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -221,50 +175,18 @@ export function SectionEditor({
             className={`${fieldClass} h-auto py-2`}
             aria-label={title}
           />
-          <Button type="submit" disabled={pending}>
-            {pending ? "Saving…" : "Save section"}
-          </Button>
+          {/* REMOVABLE block 4 of 4: while the notice is open its two buttons replace Save. Without it: always the Save button. */}
+          {conflictOpen && conflict.theirs ? (
+            <SectionConflictNotice theirs={conflict.theirs} showTheirs={conflict.showTheirs} busy={pending} onToggle={conflict.toggleTheirs} onSaveMine={conflict.saveMine} onUseTheirs={conflict.useTheirs} />
+          ) : (
+            <Button type="submit" disabled={pending}>
+              {pending ? "Saving…" : "Save section"}
+            </Button>
+          )}
         </form>
       ) : (
         <p className="whitespace-pre-wrap">{initialText || "—"}</p>
       )}
-      {conflict ? (
-        <div className="flex flex-col gap-3 rounded-md border border-zinc-400 p-3">
-          <h3 ref={headingRef} id={headingId} tabIndex={-1} className="font-semibold">
-            {CONFLICT_HEADING}
-          </h3>
-          <p>{CONFLICT_EXPLAIN}</p>
-          <div className="flex flex-col gap-1">
-            <h4 className="font-medium">{CONFLICT_MINE_LABEL}</h4>
-            <p className="whitespace-pre-wrap rounded-md border border-zinc-300 p-2">{conflict.mine || "—"}</p>
-          </div>
-          <div className="flex flex-col gap-1">
-            <h4 className="font-medium">{CONFLICT_THEIRS_LABEL}</h4>
-            <p>
-              {versionAttribution(conflict.theirs)}
-              {conflict.theirs.editedAt ? (
-                <>
-                  {" "}
-                  · <LocalTime iso={conflict.theirs.editedAt} />
-                </>
-              ) : null}{" "}
-              (version {conflict.theirs.version})
-            </p>
-            <p className="whitespace-pre-wrap rounded-md border border-zinc-300 p-2">{conflict.theirs.text || "—"}</p>
-          </div>
-          <div className="flex flex-col gap-2">
-            <Button type="button" onClick={keepMine} disabled={pending}>
-              {pending ? "Saving…" : KEEP_MINE_BUTTON}
-            </Button>
-            <Button type="button" variant="outline" onClick={takeTheirs} disabled={pending}>
-              {TAKE_THEIRS_BUTTON}
-            </Button>
-            <Button type="button" variant="outline" onClick={cancelConflict} disabled={pending}>
-              {CANCEL_BUTTON}
-            </Button>
-          </div>
-        </div>
-      ) : null}
       {editedAt ? (
         <p>
           {versionAttribution({ editType, authorName })} · <LocalTime iso={editedAt} />
