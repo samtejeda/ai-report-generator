@@ -1,6 +1,6 @@
 /**
  * Transactional email, kept deliberately small. Account email only: verification link,
- * password-reset link, "your password was changed". Bodies carry NO PHI and no names: a link
+ * password-reset link, "your password was changed", an invitation link. Bodies carry NO PHI and no names: a link
  * or a fixed sentence, nothing about clients, reports or the practice's work (Resend's content
  * policy and CLAUDE.md both require this).
  *
@@ -46,6 +46,18 @@ export const mailTemplates = {
       to,
       subject: "Your password was changed",
       text: "The password for your account was just changed, and all other sessions were signed out.\n\nIf this was not you, contact your practice owner right away.",
+    };
+  },
+  /**
+   * The invitation link. A link and fixed sentences only: no name of the inviter, no practice name,
+   * nothing about clients (the person does not need to know more to decide, and the mail may sit in
+   * an inbox the practice does not control).
+   */
+  invitation(to: string, url: string, expiresInDays: number): Mail {
+    return {
+      to,
+      subject: "You have been invited to create an account",
+      text: `You have been invited to create an account. Open this link to choose your name and password. It expires in ${expiresInDays} days and works once.\n\n${url}\n\n${FOOTER}`,
     };
   },
   /** Sent to a person whose authenticator the practice owner just reset. No link, no name. */
