@@ -69,3 +69,21 @@ Recommendation: 1 and 2 together.
 ## Postman pass (to do)
 
 Server-side checks the browser cannot reach: a 201-character client name (A3.4) and a section of 20 001 characters (A4.5); every role check through the API; the same flows as above. Cautions: sign-in needs the code step, state-changing calls need the app's own `Origin` header, and the sign-in limit applies.
+
+## Retest, 2026-10-31 to 2026-11-06
+
+After the fixes for findings 1 to 14 merged (#66 to #73), Sam re-ran the affected steps on screen and the new `GET /api/reports/{id}/state` check in the browser console, and reported each result.
+
+| Area | Result | Notes |
+|---|---|---|
+| Stale-state family (findings 2, 6, 13), signed-in redirects (11, 12) | Pass | Seven checks after #66. |
+| Sign-in limit and audit address (3, 8) | Pass | Limit 10 per 15 minutes; audit rows carry the address as received (`::1` locally). |
+| Version authors, waits and labels (10) | Pass | |
+| Unsaved-changes warning (#73), frontend steps 1 to 7 | Pass | Popup fits a phone-width window; keyboard use works. |
+| `/state` check: normal answer, version after a save, unknown report 404, signed out | Pass | No audit row from any of the calls (checked read-only). |
+| `/state` 429 | Not seen by hand | The sequential console loop is too slow to put 120 calls in one clock minute (counter showed 22). Covered by `lib/auth/state.integration.test.ts`: the 121st call is a 429; 130 calls at once give 120 served and 10 refused. |
+| Refused-save screen (two tabs) | Not run | Optional; the whole concurrent-edit feature may be removed (PROGRESS decisions row 15). |
+| C2, D8, Finalize with unsaved text | Blocked | The Finalize button needs a `generated` report, which needs a working inference endpoint (Tailscale). |
+
+Still open: finding 7 (sign-in speed; measured, no fix; re-measure after deploy). Per-finding fix status is in PROGRESS decisions row 13.
+
