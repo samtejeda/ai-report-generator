@@ -169,9 +169,22 @@ export async function startHarness(options: { appRole: string; authRole: string;
     return sent;
   }
 
+  /**
+   * One statement as the app's or the auth layer's real least-privilege login role (not the owner), for tests of what
+   * a role may and may not do in the database. A pool of its own, closed after the call.
+   */
+  async function asRole(role: "app" | "auth", text: string, params: unknown[] = []) {
+    const pool = new Pool({ connectionString: role === "app" ? process.env.DATABASE_URL : process.env.AUTH_DATABASE_URL });
+    try {
+      return await pool.query(text, params);
+    } finally {
+      await pool.end();
+    }
+  }
+
   async function stop() {
     await ownerPool.end();
   }
 
-  return { owner, handle, authCall, cookieFrom, seedOrg, seedUser, enroll, makePerson, call, seen, signedInAgo, statementsOf, stop };
+  return { owner, handle, authCall, cookieFrom, seedOrg, seedUser, enroll, makePerson, call, seen, signedInAgo, statementsOf, asRole, stop };
 }

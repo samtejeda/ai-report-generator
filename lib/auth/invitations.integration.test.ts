@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { and, eq, sql } from "drizzle-orm";
 import * as schema from "@/lib/db/schema";
 import { hashInvitationToken, INVITATION_TOKEN_PATTERN } from "./invitation-token";
-import { BASE, ENABLED, startHarness, type Handler, type Person } from "./integration-harness";
+import { BASE, ENABLED, GOOD_PASSWORD, startHarness, type Handler, type Person } from "./integration-harness";
 
 // Invitations (feat/invitations) end to end: the REAL route modules, the REAL Better Auth instance
 // (every caller holds a cookie from a real password + authenticator sign-in), and the REAL
@@ -18,18 +18,25 @@ describe.skipIf(!ENABLED)("invitations through the real stack", () => {
   let listRoute: { GET: Handler; POST: Handler };
   let revokeRoute: { POST: Handler };
   let resendRoute: { POST: Handler };
+  let acceptRoute: { POST: Handler };
+  let meRoute: { GET: Handler };
+  let clientsRoute: { GET: Handler };
+  let clientRoute: { GET: Handler };
+  let assignmentsRoute: { POST: Handler };
 
   let orgA: string;
   let orgB: string;
   let orgC: string;
   let orgD: string;
   let orgE: string;
+  let orgF: string;
   // Creating or re-sending is limited to 20 an hour per practice and audit rows cannot be deleted, so each group of
   // tests that creates many invitations uses its own practice: A (who may call, listing, cross-tenant), D (creating),
   // E (addresses that have an account), C (the limit itself).
   let ownerA: Person, ownerA2: Person, adminA: Person, assocA: Person;
   let ownerB: Person, assocB: Person;
-  let ownerC: Person, ownerD: Person, ownerE: Person;
+  let ownerC: Person, ownerD: Person, ownerE: Person, ownerF: Person;
+  let clientF: string;
   let deactivatedB: { userId: string; email: string };
 
   // Everything the console transport printed: the only place a raw token ever appears.
@@ -74,13 +81,19 @@ describe.skipIf(!ENABLED)("invitations through the real stack", () => {
     listRoute = (await import("@/app/api/admin/invitations/route")) as unknown as { GET: Handler; POST: Handler };
     revokeRoute = (await import("@/app/api/admin/invitations/[id]/revoke/route")) as unknown as { POST: Handler };
     resendRoute = (await import("@/app/api/admin/invitations/[id]/resend/route")) as unknown as { POST: Handler };
+    acceptRoute = (await import("@/app/api/invitations/accept/route")) as unknown as { POST: Handler };
+    meRoute = (await import("@/app/api/me/route")) as unknown as { GET: Handler };
+    clientsRoute = (await import("@/app/api/clients/route")) as unknown as { GET: Handler };
+    clientRoute = (await import("@/app/api/clients/[id]/route")) as unknown as { GET: Handler };
+    assignmentsRoute = (await import("@/app/api/admin/assignments/route")) as unknown as { POST: Handler };
 
     orgA = await h.seedOrg("invite-A");
     orgB = await h.seedOrg("invite-B");
     orgC = await h.seedOrg("invite-C");
     orgD = await h.seedOrg("invite-D");
     orgE = await h.seedOrg("invite-E");
-    [ownerA, ownerA2, adminA, assocA, ownerB, assocB, ownerC, ownerD, ownerE] = await Promise.all([
+    orgF = await h.seedOrg("invite-F");
+    [ownerA, ownerA2, adminA, assocA, ownerB, assocB, ownerC, ownerD, ownerE, ownerF] = await Promise.all([
       h.makePerson(orgA, "owner-a", "owner"),
       h.makePerson(orgA, "owner-a2", "owner"),
       h.makePerson(orgA, "admin-a", "admin"),
@@ -90,7 +103,10 @@ describe.skipIf(!ENABLED)("invitations through the real stack", () => {
       h.makePerson(orgC, "owner-c", "owner"),
       h.makePerson(orgD, "owner-d", "owner"),
       h.makePerson(orgE, "owner-e", "owner"),
+      h.makePerson(orgF, "owner-f", "owner"),
     ]);
+    const [client] = await h.owner.insert(schema.clients).values({ organizationId: orgF, displayName: "Synthetic Client F" }).returning();
+    clientF = client.id;
     const dead = await h.seedUser(orgB, "deactivated-b", "associate");
     await h.owner.update(schema.users).set({ deletedAt: new Date() }).where(eq(schema.users.id, dead.userId));
     deactivatedB = { userId: dead.userId, email: dead.email };
@@ -516,6 +532,274 @@ describe.skipIf(!ENABLED)("invitations through the real stack", () => {
       expect(theirs.length).toBeGreaterThan(0);
       for (const seen of h.seen.filter((s) => s.orgId === orgA)) for (const email of theirs) expect(seen.text, `${seen.caller} saw ${email}`).not.toContain(email);
       for (const seen of h.seen.filter((s) => s.orgId === orgB)) for (const email of mine) expect(seen.text, `${seen.caller} saw ${email}`).not.toContain(email);
+    });
+  });
+
+  // ---------------------------------------------------------------------------------------
+  describe("accepting an invitation (public)", () => {
+    // Every test uses a client address of its own: the accept limit is per address.
+    const runOctet = Math.floor(Math.random() * 256);
+    let ipCounter = 0;
+    const nextIp = () => `198.51.${runOctet}.${(ipCounter++ % 250) + 1}`;
+    const visitor = { label: "visitor", orgId: "none" };
+    const minted: string[] = [];
+
+    const accept = (body: unknown, o: { ip?: string; origin?: string | null; rawBody?: string } = {}) =>
+      h.call(visitor, acceptRoute.POST, { method: "POST", path: "/api/invitations/accept", body, rawBody: o.rawBody, origin: o.origin, headers: { "x-forwarded-for": o.ip ?? nextIp() } });
+    /** The whole answer, for comparing two of them: status, body and every header but the date. */
+    const answer = (r: { status: number; text: string; headers: Headers }) => ({ status: r.status, text: r.text, headers: [...r.headers.entries()].filter(([k]) => k !== "date").sort() });
+    const mint = async (email: string = fresh("invitee")) => {
+      await justSignedIn(ownerF);
+      const r = await invite(ownerF, { email });
+      expect(r.status).toBe(201);
+      const token = tokenFor(email);
+      minted.push(token);
+      return { id: (r.json.data as { id: string }).id, email, token };
+    };
+    const usersWith = (email: string) => h.owner.select().from(schema.users).where(eq(schema.users.email, email));
+    const body = (token: string, extra: Record<string, unknown> = {}) => ({ token, name: "Synthetic Invitee", password: GOOD_PASSWORD, ...extra });
+
+    it("creates an associate in the inviting practice, verified, with a credential, and NO session: the invitation is spent and every row is audited without the token, address or name", async () => {
+      const { id, email, token } = await mint();
+      const r = await accept(body(token, { name: "  Synthetic Invitee  " }), { ip: "203.0.113.77" });
+      expect(r.status).toBe(201);
+      expect(r.json).toEqual({ data: { status: "accepted" } });
+      expect(r.headers.get("set-cookie")).toBeNull();
+      expect(r.headers.get("cache-control")).toBe("private, no-store");
+      expect(r.text).not.toContain(email);
+
+      const [user] = await usersWith(email);
+      expect(user).toMatchObject({ organizationId: orgF, role: "associate", emailVerified: true, twoFactorEnabled: false, deletedAt: null, displayName: "Synthetic Invitee" });
+      const accounts = await h.owner.select().from(schema.authAccounts).where(eq(schema.authAccounts.userId, user.id));
+      expect(accounts).toHaveLength(1);
+      expect(accounts[0].providerId).toBe("credential");
+      expect(accounts[0].password).toBeTruthy();
+      expect(accounts[0].password).not.toContain(GOOD_PASSWORD);
+      expect(await h.owner.select().from(schema.authSessions).where(eq(schema.authSessions.userId, user.id))).toHaveLength(0);
+      expect((await stored(id)).acceptedAt).not.toBeNull();
+
+      const accepted = await auditFor("invitation.accepted", id);
+      expect(accepted).toHaveLength(1);
+      expect(accepted[0]).toMatchObject({ organizationId: orgF, actorUserId: user.id, resourceType: "invitation", outcome: "success", metadata: { role: "associate", ip: "203.0.113.77" } });
+      const created = await auditFor("user.created", user.id);
+      expect(created).toHaveLength(1);
+      expect(created[0]).toMatchObject({ organizationId: orgF, actorUserId: ownerF.userId, resourceType: "users", metadata: { method: "invitation", role: "associate" } });
+      const text = JSON.stringify([accepted, created]);
+      for (const secret of [token, hashInvitationToken(token), email, "Synthetic Invitee", GOOD_PASSWORD]) expect(text).not.toContain(secret);
+    });
+
+    it("the new person signs in through real Better Auth with the chosen password, is sent to authenticator setup (a password-only session is refused), and sees NO client until the owner assigns one", async () => {
+      const { email, token } = await mint();
+      expect((await accept(body(token))).status).toBe(201);
+      const [user] = await usersWith(email);
+
+      // The password step works (the hash is the one Better Auth verifies) and the wrong password does not.
+      expect((await h.authCall("/sign-in/email", { body: { email, password: GOOD_PASSWORD + "x" } })).status).toBe(401);
+      const first = await h.authCall("/sign-in/email", { body: { email, password: GOOD_PASSWORD } });
+      expect(first.status).toBe(200);
+      const passwordOnly = { label: "invitee-password-only", orgId: orgF, cookie: h.cookieFrom(first) };
+      expect((await h.call(passwordOnly, meRoute.GET, { path: "/api/me" })).status).toBe(401);
+      expect((await h.call(passwordOnly, clientsRoute.GET, { path: "/api/clients" })).status).toBe(401);
+
+      // Finish the authenticator setup like everyone, then look at the clients.
+      const person = await h.enroll({ label: "invitee", userId: user.id, orgId: orgF, email });
+      expect((await h.call(person, meRoute.GET, { path: "/api/me" })).json).toEqual({ id: user.id, role: "associate" });
+      const none = await h.call(person, clientsRoute.GET, { path: "/api/clients" });
+      expect(none.status).toBe(200);
+      expect(none.json.data).toEqual([]);
+      const direct = await h.call(person, clientRoute.GET, { path: `/api/clients/${clientF}`, params: { id: clientF } });
+      expect(direct.status).toBe(404);
+      expect(none.text + direct.text).not.toContain("Synthetic Client F");
+
+      // The existing rule: the owner's assignment is what lets an associate see it.
+      const assigned = await h.call(ownerF, assignmentsRoute.POST, { method: "POST", path: "/api/admin/assignments", body: { clientId: clientF, userId: user.id } });
+      expect(assigned.status).toBe(201);
+      expect((await h.call(person, clientRoute.GET, { path: `/api/clients/${clientF}`, params: { id: clientF } })).status).toBe(200);
+    });
+
+    it("an unknown, used, revoked, expired, replaced or no-longer-available token all get the SAME answer, and no account is created for any of them", async () => {
+      const used = await mint();
+      expect((await accept(body(used.token))).status).toBe(201);
+      const revoked = await mint();
+      await revoke(ownerF, revoked.id);
+      const expired = await mint();
+      await h.owner.update(schema.invitations).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(schema.invitations.id, expired.id));
+      const replaced = await mint();
+      await justSignedIn(ownerF);
+      await invite(ownerF, { email: replaced.email }); // a second link for the same address kills the first
+      const taken = await mint();
+      await h.owner.insert(schema.users).values({ organizationId: orgB, email: taken.email, displayName: "Synthetic Earlier", role: "associate", emailVerified: true });
+      const unknownToken = (await import("./invitation-token")).newInvitationToken().token;
+
+      const cases: [string, string][] = [["unknown", unknownToken], ["used", used.token], ["revoked", revoked.token], ["expired", expired.token], ["replaced", replaced.token], ["address taken", taken.token]];
+      const answers = [];
+      for (const [label, token] of cases) {
+        const r = await accept(body(token));
+        expect(r.status, label).toBe(400);
+        expect(r.json.error?.code, label).toBe("invalid_invitation");
+        answers.push(answer(r));
+      }
+      for (const a of answers) expect(a).toEqual(answers[0]);
+
+      expect(await usersWith(revoked.email)).toHaveLength(0);
+      expect(await usersWith(expired.email)).toHaveLength(0);
+      expect(await usersWith(replaced.email)).toHaveLength(0);
+      const stillTaken = await usersWith(taken.email);
+      expect(stillTaken).toHaveLength(1);
+      expect(stillTaken[0].organizationId).toBe(orgB);
+      for (const inv of [revoked, expired, taken]) expect((await stored(inv.id)).acceptedAt).toBeNull();
+
+      // Each KNOWN link that could not be used left one audit row in the inviting practice, with a closed reason.
+      const reasonOf = async (id: string) => (await auditFor("invitation.accept_refused", id)).map((a) => a.metadata);
+      expect(await reasonOf(used.id)).toEqual([{ reason: "used", ip: expect.any(String) }]);
+      expect(await reasonOf(revoked.id)).toEqual([{ reason: "revoked", ip: expect.any(String) }]);
+      expect(await reasonOf(expired.id)).toEqual([{ reason: "expired", ip: expect.any(String) }]);
+      expect(await reasonOf(taken.id)).toEqual([{ reason: "address_in_use", ip: expect.any(String) }]);
+      // The made-up token has no practice: an application log line with the address, never the token.
+      expect(logged.some((l) => l.includes("invitation.accept_unknown_token"))).toBe(true);
+      expect(logged.join("\n")).not.toContain(unknownToken);
+      // Practice B sees none of it.
+      expect((await h.owner.select().from(schema.auditLog).where(and(eq(schema.auditLog.organizationId, orgB), eq(schema.auditLog.action, "invitation.accept_refused")))).length).toBe(0);
+    });
+
+    it("simultaneous accepts of one link create exactly one user and one credential", async () => {
+      const { id, email, token } = await mint();
+      const replies = await Promise.all(Array.from({ length: 4 }, () => accept(body(token))));
+      expect(replies.map((r) => r.status).sort()).toEqual([201, 400, 400, 400]);
+      for (const r of replies.filter((x) => x.status === 400)) expect(r.json.error?.code).toBe("invalid_invitation");
+      const users = await usersWith(email);
+      expect(users).toHaveLength(1);
+      expect(await h.owner.select().from(schema.authAccounts).where(eq(schema.authAccounts.userId, users[0].id))).toHaveLength(1);
+      expect(await auditFor("invitation.accepted", id)).toHaveLength(1);
+      expect(await auditFor("user.created", users[0].id)).toHaveLength(1);
+      // The losers waited for the row lock and then found the invitation used (not "address in use", which
+      // is what an unlocked race would have fallen back to).
+      const refused = await auditFor("invitation.accept_refused", id);
+      expect(refused.map((a) => (a.metadata as { reason: string }).reason)).toEqual(["used", "used", "used"]);
+    });
+
+    it("the function takes the invitation's row lock: while another transaction holds it, an accept waits, then finds the state that transaction left", async () => {
+      const { id, email, token } = await mint();
+      const hash = hashInvitationToken(token);
+      let settled = false;
+      let pending: Promise<string> | undefined;
+      await h.owner.transaction(async (tx) => {
+        await tx.execute(sql`select 1 from invitations where id = ${id} for update`);
+        pending = h.asRole("auth", "select accept_invitation($1, 'Synthetic Waiter', $2) as r", [hash, "x".repeat(40)]).then((r) => {
+          settled = true;
+          return r.rows[0].r as string;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        expect(settled, "the accept must wait for the lock").toBe(false);
+        // While holding the lock, revoke it: the waiting accept must see that, not the state it started with.
+        await tx.execute(sql`update invitations set revoked_at = now() where id = ${id}`);
+      });
+      expect(await pending).toBe("refused");
+      expect(await usersWith(email)).toHaveLength(0);
+      expect((await auditFor("invitation.accept_refused", id)).map((a) => (a.metadata as { reason: string }).reason)).toEqual(["revoked"]);
+    });
+
+    it("six simultaneous calls of the database function (no password hashing to space them out) still make exactly one user: the row lock makes the rest find it used", async () => {
+      const { id, email, token } = await mint();
+      const hash = hashInvitationToken(token);
+      const results = await Promise.all(Array.from({ length: 6 }, () => h.asRole("auth", "select accept_invitation($1, 'Synthetic Racer', $2) as r", [hash, "x".repeat(40)])));
+      expect(results.map((r) => r.rows[0].r).sort()).toEqual(["accepted", "refused", "refused", "refused", "refused", "refused"]);
+      const users = await usersWith(email);
+      expect(users).toHaveLength(1);
+      expect(await h.owner.select().from(schema.authAccounts).where(eq(schema.authAccounts.userId, users[0].id))).toHaveLength(1);
+      const refused = await auditFor("invitation.accept_refused", id);
+      expect(refused.map((a) => (a.metadata as { reason: string }).reason)).toEqual(Array(5).fill("used"));
+      expect(await auditFor("invitation.accepted", id)).toHaveLength(1);
+    });
+
+    it("two invitations for one address from two practices at once still make one user", async () => {
+      await justSignedIn(ownerB);
+      const email = fresh("race");
+      const fromF = await mint(email);
+      await invite(ownerB, { email });
+      const tokenB = tokenFor(email);
+      minted.push(tokenB);
+      const replies = await Promise.all([accept(body(fromF.token)), accept(body(tokenB))]);
+      expect(replies.map((r) => r.status).sort()).toEqual([201, 400]);
+      expect(await usersWith(email)).toHaveLength(1);
+    });
+
+    it("a weak password, a bad name or a role in the body is a 400 that does not spend the invitation, and the link still works afterwards", async () => {
+      const { id, email, token } = await mint();
+      for (const [label, payload] of [
+        ["11 characters", body(token, { password: "elevenchars" })],
+        ["129 characters", body(token, { password: "p".repeat(129) })],
+        ["role admin", body(token, { role: "admin" })],
+        ["role owner", body(token, { role: "owner" })],
+        ["organization", body(token, { organizationId: orgB })],
+        ["empty name", body(token, { name: "  " })],
+        ["control character in the name", body(token, { name: "A\u0007B" })],
+      ] as const) {
+        const r = await accept(payload);
+        expect(r.status, label).toBe(400);
+        expect(r.json.error?.code, label).toBe("validation_failed");
+      }
+      expect(await usersWith(email)).toHaveLength(0);
+      expect((await stored(id)).acceptedAt).toBeNull();
+      expect((await accept(body(token))).status).toBe(201);
+      // Whatever was sent, the new person is an associate of the inviting practice.
+      expect((await usersWith(email))[0]).toMatchObject({ role: "associate", organizationId: orgF });
+    });
+
+    it("a request from another origin, or with none, is refused (403) and the invitation is untouched", async () => {
+      const { id, email, token } = await mint();
+      expect((await accept(body(token), { origin: "https://evil.example" })).status).toBe(403);
+      expect((await accept(body(token), { origin: null })).status).toBe(403);
+      expect(await usersWith(email)).toHaveLength(0);
+      expect((await stored(id)).acceptedAt).toBeNull();
+    });
+
+    it("limits requests per client address (every request counts, an IPv6 address by its /64), and another address is unaffected", async () => {
+      const a = Math.floor(Math.random() * 65_536).toString(16);
+      const b = Math.floor(Math.random() * 65_536).toString(16);
+      const first = `2001:db8:${a}:${b}::1`;
+      const sameSubnet = `2001:db8:${a}:${b}:aaaa::2`;
+      for (let i = 0; i < 10; i++) expect((await accept({}, { ip: first })).status, `request ${i + 1}`).toBe(400);
+      const blocked = await accept({}, { ip: sameSubnet });
+      expect(blocked.status).toBe(429);
+      expect(blocked.json.error?.code).toBe("rate_limited");
+      const wait = Number(blocked.headers.get("retry-after"));
+      expect(wait).toBeGreaterThan(0);
+      expect(wait).toBeLessThanOrEqual(900);
+      // Even a valid link is refused while the address is limited, and stays unspent.
+      const { id, token } = await mint();
+      expect((await accept(body(token), { ip: first })).status).toBe(429);
+      expect((await stored(id)).acceptedAt).toBeNull();
+      expect((await accept(body(token), { ip: nextIp() })).status).toBe(201);
+    });
+
+    it("the database door: auth_runtime cannot insert a user itself, app_runtime cannot even call accept_invitation, and a bad name or credential is refused", async () => {
+      const code = async (run: Promise<unknown>) => {
+        try {
+          await run;
+        } catch (e) {
+          return (e as { code?: string }).code;
+        }
+        return "no error";
+      };
+      const longHash = "x".repeat(30);
+      expect(await code(h.asRole("auth", "insert into users (organization_id, email, display_name, role) values ($1, $2, 'x', 'associate')", [orgF, fresh("direct")]))).toBe("42501");
+      expect((await h.asRole("auth", "select accept_invitation($1, 'Synthetic', $2) as r", ["0".repeat(64), longHash])).rows[0].r).toBe("unknown");
+      expect((await h.asRole("auth", "select accept_invitation($1, 'Synthetic', $2) as r", ["not-hex", longHash])).rows[0].r).toBe("unknown");
+      expect(await code(h.asRole("auth", "select accept_invitation($1, '', $2)", ["0".repeat(64), longHash]))).toBe("22023");
+      expect(await code(h.asRole("auth", "select accept_invitation($1, 'Synthetic', 'short')", ["0".repeat(64)]))).toBe("22023");
+      expect(await code(h.asRole("app", "select accept_invitation($1, 'Synthetic', $2)", ["0".repeat(64), longHash]))).toBe("42501");
+      expect(await code(h.asRole("auth", "select count(*) from invitations"))).toBe("42501");
+    });
+
+    it("nothing the invitation flow wrote or logged contains any token it handed out", async () => {
+      expect(minted.length).toBeGreaterThan(5);
+      const rows = await h.owner.execute(sql`select metadata::text as m, resource_id::text as r from audit_log where organization_id in (${orgA}, ${orgB}, ${orgC}, ${orgD}, ${orgE}, ${orgF})`);
+      const everything = JSON.stringify(rows.rows) + logged.join("\n") + h.seen.map((s) => s.text).join("\n");
+      for (const token of minted) {
+        expect(everything).not.toContain(token);
+        expect(everything).not.toContain(hashInvitationToken(token));
+      }
     });
   });
 
