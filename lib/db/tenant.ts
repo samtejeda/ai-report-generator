@@ -35,7 +35,7 @@ export const MAX_PAGE_SIZE = 200;
 
 // ---- Table registries: the single source of truth, checked against the schema in tests.
 export const SOFT_DELETE_TABLES = [s.users, s.clients, s.clientAssignments, s.clientHistory, s.reportTemplates, s.reports, s.ragDocuments] as const;
-export const UPDATABLE_TABLES = [...SOFT_DELETE_TABLES, s.reportSections, s.jobs] as const;
+export const UPDATABLE_TABLES = [...SOFT_DELETE_TABLES, s.reportSections, s.jobs, s.invitations] as const;
 export const INSERT_ONLY_TABLES = [s.methodologyPrompts, s.reportVersions, s.auditLog] as const;
 // Derived / regenerable data the app may hard-delete (re-indexing replaces chunks).
 export const DERIVED_DELETABLE_TABLES = [s.ragDocuments, s.ragChunks, s.ragEmbeddings, s.jobs] as const;
