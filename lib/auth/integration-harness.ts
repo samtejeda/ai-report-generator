@@ -30,7 +30,7 @@ export type Role = "owner" | "associate" | "admin";
 export type Db = NeonDatabase<typeof schema> & { $client: Pool };
 export type Handler = (request: Request, ctx?: { params?: Promise<Record<string, string>> }) => Promise<Response>;
 export type Person = { label: string; userId: string; orgId: string; email: string; secret?: string; cookie: string };
-export type Reply = { status: number; text: string; json: Record<string, unknown> & { data?: unknown; error?: { code: string; message: string } }; headers: Headers };
+export type Reply = { status: number; text: string; json: Record<string, unknown> & { data?: unknown; error?: { code: string; message: string } }; headers: Headers; bytes: Uint8Array };
 
 // RFC 6238 TOTP, what an authenticator app does, so the sign-in is the real one.
 const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -138,9 +138,12 @@ export async function startHarness(options: { appRole: string; authRole: string;
     const payload = o.rawBody ?? (o.body === undefined ? undefined : JSON.stringify(o.body));
     if (payload !== undefined) headers.set("content-type", "application/json");
     const res = await handler(new Request(`${BASE}${o.path}`, { method, headers, body: payload }), o.params ? { params: Promise.resolve(o.params) } : undefined);
-    const text = await res.text();
+    // Read the bytes once: a file download is binary, so its `text` is only a lossy view and `json` stays empty.
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const text = new TextDecoder().decode(bytes);
+    const binary = /^application\/(vnd\.|octet-stream)/.test(res.headers.get("content-type") ?? "");
     seen.push({ caller: who.label, orgId: who.orgId, text });
-    return { status: res.status, text, json: text ? JSON.parse(text) : {}, headers: res.headers };
+    return { status: res.status, text, json: text && !binary ? JSON.parse(text) : {}, headers: res.headers, bytes };
   }
 
   /** Make a person's sign-in `secondsAgo` old (the session's created_at), to test the fresh gate. */
