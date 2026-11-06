@@ -8,6 +8,7 @@ describe("mail templates carry no PHI and no names", () => {
     mailTemplates.resetPassword("a@example.com", url, 60),
     mailTemplates.passwordChanged("a@example.com"),
     mailTemplates.mfaReset("a@example.com"),
+    mailTemplates.invitation("a@example.com", "https://app.example.com/accept-invitation?token=TOKEN", 7),
   ];
 
   it("addresses only the recipient and contains no other personal field", () => {
@@ -17,10 +18,11 @@ describe("mail templates carry no PHI and no names", () => {
     }
   });
 
-  it("links appear only in the verification and reset mails", () => {
+  it("links appear only in the verification, reset and invitation mails", () => {
     expect(mails[0].text).toContain(url);
     expect(mails[1].text).toContain(url);
     expect(mails[2].text).not.toMatch(/https?:\/\//);
+    expect(mails[3].text).not.toMatch(/https?:\/\//);
   });
 
   it("the owner-reset notice has no link, tells the person what happens next and what to do if unexpected", () => {
@@ -28,6 +30,18 @@ describe("mail templates carry no PHI and no names", () => {
     expect(mails[3].text).toMatch(/set up an authenticator app again/);
     expect(mails[3].text).toMatch(/If you did not expect this/);
     expect(mails[3].subject).toBe("Your two-step sign-in was reset");
+  });
+
+  it("the invitation is a link and fixed sentences: it says it works once and expires, and names no person or practice", () => {
+    const m = mails[4];
+    expect(m.text).toContain("https://app.example.com/accept-invitation?token=TOKEN");
+    expect(m.text).toMatch(/works once/);
+    expect(m.text).toMatch(/expires in 7 days/);
+    expect(m.text).toMatch(/If you did not expect this email, you can ignore it/);
+    expect(m.subject).toBe("You have been invited to create an account");
+    // Nothing in it varies except the recipient, the link and the number of days.
+    const other = mailTemplates.invitation("b@example.com", "https://other.example.com/x", 7);
+    expect(other.text.replace("https://other.example.com/x", "L")).toBe(m.text.replace("https://app.example.com/accept-invitation?token=TOKEN", "L"));
   });
 
   it("the reset mail says the link works once and expires", () => {

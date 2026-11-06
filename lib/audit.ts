@@ -48,6 +48,16 @@ export const AUDIT_ACTIONS = [
   "user.reactivated",
   "assignment.created",
   "assignment.ended",
+  // Invitations (feat/invitations). The invitation id and a role or a closed reason; never the address, never the token.
+  // `.refused` is the inviting owner's attempt for an address that already has an account (in any practice, which is
+  // never said); `.accept_refused` is a known link that could not be used. An unknown link has no practice to
+  // attribute a row to and is an application log line instead.
+  "invitation.created",
+  "invitation.resent",
+  "invitation.revoked",
+  "invitation.accepted",
+  "invitation.refused",
+  "invitation.accept_refused",
   // Reports (feat/report-shell). Report, section-version and template ids and the caller's role; never section text.
   "report.listed",
   "report.viewed",
@@ -76,6 +86,8 @@ export const AUDIT_METADATA_KEYS = ["reason", "ip", "method", "role", "previous_
 export const AUDIT_CLIENT_FIELDS = ["display_name", "date_of_birth", "grade_level", "external_id"] as const;
 /** Why a generation failed: a code, never text from the model or the transport. */
 export const AUDIT_GENERATION_FAILURES = ["unreachable", "timeout", "bad_response", "invalid_output", "invalid_config", "not_implemented", "stale", "internal"] as const;
+/** Why an invitation was not used or sent: a code from a closed list. `.refused` allows only the first. */
+export const AUDIT_INVITATION_REFUSALS = ["address_in_use", "expired", "revoked", "used"] as const;
 const MAX_VALUE_LENGTH = 100;
 // An Ollama tag (same character rules as lib/ai/models.ts), so `model` cannot hold free text.
 export const MODEL_TAG = /^(?!.*\/\/)[A-Za-z0-9][A-Za-z0-9._\-:/]{0,99}$/; // no "//", so a URL cannot pass as a tag
@@ -116,6 +128,10 @@ export function buildAuditRow(event: AuditEvent) {
   // A failed generation says why with a code from the closed list, nothing else.
   if (event.action === "report.generation_failed" && !(AUDIT_GENERATION_FAILURES as readonly string[]).includes(String(metadata.reason))) {
     throw new Error("audit metadata value for reason is not a known generation failure code");
+  }
+  if (event.action === "invitation.refused" && metadata.reason !== "address_in_use") throw new Error("audit metadata value for reason is not a known invitation refusal");
+  if (event.action === "invitation.accept_refused" && !(AUDIT_INVITATION_REFUSALS as readonly string[]).includes(String(metadata.reason))) {
+    throw new Error("audit metadata value for reason is not a known invitation refusal");
   }
   return {
     action: event.action,

@@ -13,6 +13,9 @@ const MESSAGES = {
   reauth_required: "Sign in again to do this.",
   not_found: "Not found.",
   conflict: "This conflicts with the current state. Reload and try again.",
+  // One answer for an unknown, expired, revoked or already used invitation link, and for an address that has
+  // an account by now: the caller cannot tell which, so the answer cannot be used to probe anything.
+  invalid_invitation: "This invitation link is not valid.",
   rate_limited: "Too many requests. Try again shortly.",
   inference_not_configured: "Text generation is not set up for this practice.",
   inference_failed: "Text generation did not work. Try again.",
@@ -29,6 +32,7 @@ const STATUS: Record<ApiErrorCode, number> = {
   reauth_required: 403,
   not_found: 404,
   conflict: 409,
+  invalid_invitation: 400,
   rate_limited: 429,
   inference_not_configured: 409,
   inference_failed: 502,

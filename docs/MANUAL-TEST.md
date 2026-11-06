@@ -121,7 +121,18 @@ When Tailscale is installed and `tailscale serve` exposes Ollama as an `https://
 
 ## B. Associate and admin (blocked until they can be created)
 
-Run these when the invitation feature, or any other approved way to make an associate and an admin on `dev`, exists. Sign in as each in a separate browser profile.
+An associate can now be created by invitation (backend only; no screen yet). An **admin cannot**: admin invitations are undecided, so part B's admin steps (B9 to B12) stay blocked. Sign in as each person in a separate browser profile.
+
+**Invite an associate by hand** (needs the migrations `0015` and `0016` applied to `dev`, which is Sam's go-ahead; synthetic address only, for example `associate-test@example.com`; nothing is sent, the link is printed in the dev server terminal):
+
+1. Sign in as the owner (sign in again if the last sign-in was more than 5 minutes ago; creating an invitation needs that).
+2. On any page of the app, open the browser console and run `await (await fetch('/api/admin/invitations', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({email: 'associate-test@example.com'})})).json()`. Expect `{data: {id, email, role: "associate", status: "pending", expiresAt}}`.
+3. In the terminal running `npm run dev`, find the line starting `[dev email] to=associate-test@example.com` and copy the token after `token=` (43 characters).
+4. In a separate browser profile (or signed out), open any page of the app and run `await (await fetch('/api/invitations/accept', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({token: '<the token>', name: 'Test Associate', password: '<a password of 12 or more characters>'})})).json()`. Expect `{data: {status: "accepted"}}` and no sign-in. Run it again: expect `{error: {code: "invalid_invitation", ...}}` (a link works once).
+5. Sign in as the new person on `/login`: you are sent to set up an authenticator app, as everyone is. Then continue with B1.
+6. Back as the owner, `await (await fetch('/api/admin/invitations')).json()` shows the invitation as `accepted`.
+
+Also worth trying: invite an address that already has an account (for example your own owner address): you get the same answer as for a new address, no mail line appears in the terminal, and the address is not revealed.
 
 | # | As | Do | Expect |
 |---|---|---|---|

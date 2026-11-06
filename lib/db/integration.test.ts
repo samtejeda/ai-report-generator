@@ -137,6 +137,13 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
     const sub = await seedClientSubtree(org.id, user.id, tpl.id, p1.id, `${label}-1`);
     const [client2] = await t.insert(schema.clients, { displayName: `Synthetic ${label}-2` });
     await t.insert(schema.readLimitCounters, { userId: user.id, key: "report_state", windowStart: new Date(), count: 1 });
+    // A pending invitation (a made-up hash: 64 hex characters from two random UUIDs).
+    await t.insert(schema.invitations, {
+      email: `invitee-${org.id}@example.test`,
+      tokenHash: (crypto.randomUUID() + crypto.randomUUID()).replaceAll("-", "").slice(0, 64),
+      invitedBy: user.id,
+      expiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
+    });
     const [version] = await owner.select().from(schema.reportVersions).where(eq(schema.reportVersions.reportId, sub.reportId)).limit(1);
     return {
       orgId: org.id, userId: user.id, templateId: tpl.id, template2Id: tpl2.id, promptId: p1.id, prompt2Id: p2.id,
@@ -926,6 +933,61 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
       await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update read_limit_counters set key = 'report_state' where user_id = ${u}`)), INSUFFICIENT_PRIVILEGE);
       await expectPgError(owner.execute(sql`update read_limit_counters set count = -1 where user_id = ${u}`), CHECK_VIOLATION);
       await expectPgError(owner.execute(sql`insert into read_limit_counters (organization_id, user_id, key, window_start) values (${A.orgId}, ${u}, 'something_else', now())`), CHECK_VIOLATION);
+    });
+  });
+
+  describe("invitations (migration 0015)", () => {
+    const hash = () => (crypto.randomUUID() + crypto.randomUUID()).replaceAll("-", "").slice(0, 64);
+    const fresh = async (orgId: string, userId: string, email: string) => {
+      const [row] = await tenantDb({ organizationId: orgId }, owner).insert(schema.invitations, { email, tokenHash: hash(), invitedBy: userId, expiresAt: new Date(Date.now() + 86_400_000) });
+      return row;
+    };
+    const mail = (label: string) => `${label}-${crypto.randomUUID()}@example.test`;
+
+    it("the database accepts the associate role only, a lowercase address and a 64-character hex hash", async () => {
+      const base = { organizationId: A.orgId, invitedBy: A.userId, expiresAt: new Date(Date.now() + 86_400_000) };
+      for (const role of ["admin", "owner", "nobody"]) {
+        await expectPgError(owner.execute(sql`insert into invitations (organization_id, email, role, token_hash, invited_by, expires_at) values (${base.organizationId}, ${mail("role")}, ${role}, ${hash()}, ${base.invitedBy}, now() + interval '1 day')`), CHECK_VIOLATION);
+      }
+      await expectPgError(owner.execute(sql`insert into invitations (organization_id, email, token_hash, invited_by, expires_at) values (${A.orgId}, 'Upper@Example.test', ${hash()}, ${A.userId}, now() + interval '1 day')`), CHECK_VIOLATION);
+      await expectPgError(owner.execute(sql`insert into invitations (organization_id, email, token_hash, invited_by, expires_at) values (${A.orgId}, ${mail("hash")}, 'not-a-hash', ${A.userId}, now() + interval '1 day')`), CHECK_VIOLATION);
+    });
+
+    it("the inviter must belong to the same practice (composite foreign key)", async () => {
+      await expectPgError(
+        asOrg(A.orgId, (tx) => tx.execute(sql`insert into invitations (organization_id, email, token_hash, invited_by, expires_at) values (${A.orgId}, ${mail("fk")}, ${hash()}, ${B.userId}, now() + interval '1 day')`)),
+        FK_VIOLATION,
+      );
+    });
+
+    it("one pending invitation per address per practice; another practice may invite the same address; a closed one frees it", async () => {
+      const email = mail("pending");
+      const first = await fresh(A.orgId, A.userId, email);
+      await expectPgError(fresh(A.orgId, A.userId, email), UNIQUE_VIOLATION);
+      await fresh(B.orgId, B.userId, email);
+      await tenantDb({ organizationId: A.orgId }, app).update(schema.invitations, first.id, { revokedAt: new Date() });
+      await fresh(A.orgId, A.userId, email);
+    });
+
+    it("the app role cannot delete, cannot mark one accepted, and cannot re-point or re-open one", async () => {
+      const row = await fresh(A.orgId, A.userId, mail("privileges"));
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`delete from invitations where id = ${row.id}`)), INSUFFICIENT_PRIVILEGE);
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update invitations set accepted_at = now() where id = ${row.id}`)), INSUFFICIENT_PRIVILEGE);
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update invitations set email = ${mail("moved")} where id = ${row.id}`)), INSUFFICIENT_PRIVILEGE);
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update invitations set role = 'associate' where id = ${row.id}`)), INSUFFICIENT_PRIVILEGE);
+      // What it may do: send a new link and revoke.
+      const rotated = await tenantDb({ organizationId: A.orgId }, app).update(schema.invitations, row.id, { tokenHash: hash(), expiresAt: new Date(Date.now() + 2 * 86_400_000) });
+      expect(rotated).toHaveLength(1);
+    });
+
+    it("an accepted or revoked invitation is final for every role, the owner credential included", async () => {
+      const revoked = await fresh(A.orgId, A.userId, mail("revoked"));
+      await tenantDb({ organizationId: A.orgId }, app).update(schema.invitations, revoked.id, { revokedAt: new Date() });
+      await expectPgError(tenantDb({ organizationId: A.orgId }, app).update(schema.invitations, revoked.id, { tokenHash: hash() }), "55000");
+      await expectPgError(owner.execute(sql`update invitations set revoked_at = null where id = ${revoked.id}`), "55000");
+      const accepted = await fresh(A.orgId, A.userId, mail("accepted"));
+      await owner.execute(sql`update invitations set accepted_at = now() where id = ${accepted.id}`);
+      await expectPgError(owner.execute(sql`update invitations set accepted_at = null, expires_at = now() + interval '9 days' where id = ${accepted.id}`), "55000");
     });
   });
 });
