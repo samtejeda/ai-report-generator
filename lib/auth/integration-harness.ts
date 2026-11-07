@@ -152,6 +152,12 @@ export async function startHarness(options: { appRole: string; authRole: string;
    * The SQL text of every statement sent to the database while `run` executes (the app's own
    * pool and this one share the driver), so a test can count queries, e.g. to prove there is no
    * N+1. Text only; parameters are not recorded.
+   *
+   * Statements on `auth_sessions` are left out. The session check can include one extra write
+   * that pushes the session's idle deadline forward (at most once per interval per person), so
+   * which request carries it depends on timing, not on what the route reads. Counting it made
+   * "the same number of statements for 1 and for 6 sections" fail now and then (10 against 11).
+   * What a route itself reads or writes is still counted in full.
    */
   async function statementsOf(run: () => Promise<unknown>): Promise<string[]> {
     const sent: string[] = [];
@@ -166,7 +172,7 @@ export async function startHarness(options: { appRole: string; authRole: string;
     } finally {
       spy.mockRestore();
     }
-    return sent;
+    return sent.filter((q) => !/\bauth_sessions\b/.test(q));
   }
 
   async function stop() {
