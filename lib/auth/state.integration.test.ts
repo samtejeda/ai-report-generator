@@ -59,6 +59,17 @@ describe.skipIf(!ENABLED)("the report state check through the real stack", () =>
     const wait = await left();
     if (wait < seconds) await new Promise((r) => setTimeout(r, (wait + 0.5) * 1000));
   }
+  /**
+   * Puts a person's counter at `used` calls in the CURRENT minute, as the table owner (a fixture, like
+   * seeding a row). The limit is a fixed minute window, and 120 real calls take 35 to 55 s on a slow
+   * connection, so a test that makes them all can straddle a minute boundary and see the count restart
+   * (it did). Setting the count and then making the last calls for real keeps these tests independent
+   * of network speed; that every call is counted exactly once is proven in lib/db/integration.test.ts
+   * ("per-person read counter": the ladder and the parallel calls, with no HTTP in the way).
+   */
+  async function setUsed(person: Person, used: number) {
+    await h.owner.execute(sql`update read_limit_counters set count = ${used}, window_start = date_trunc('minute', now()) where user_id = ${person.userId} and key = 'report_state'`);
+  }
   /** A new associate who may see c1's reports, with a counter of their own. */
   async function freshReader(label: string) {
     const p = await h.makePerson(orgA, `${label}-${tag()}`, "associate");
@@ -222,16 +233,14 @@ describe.skipIf(!ENABLED)("the report state check through the real stack", () =>
 
   // ---------------------------------------------------------------------------------------
   describe("the limit", () => {
-    it("the 121st call in a minute is a 429 with Retry-After; calls 1 to 120 were served; another person is unaffected", async () => {
-      await roomInMinute(30);
+    it("the 120th call in a minute is served and the 121st is a 429 with Retry-After; another person is unaffected", async () => {
+      await roomInMinute(45);
       const r = await mkReport(orgA, c1.id, ownerA, "draft");
       const reader = await freshReader("limit");
-      const statuses: number[] = [];
-      for (let batch = 0; batch < 12; batch++) {
-        statuses.push(...(await Promise.all(Array.from({ length: 10 }, () => check(reader, r.reportId)))).map((x) => x.status));
-      }
-      expect(statuses).toHaveLength(STATE_READS_PER_MINUTE);
-      expect(statuses.every((x) => x === 200)).toBe(true);
+      // One real call creates the person's counter; then it is set to 119 used, so the next real call is the 120th.
+      expect((await check(reader, r.reportId)).status).toBe(200);
+      await setUsed(reader, STATE_READS_PER_MINUTE - 1);
+      expect((await check(reader, r.reportId)).status).toBe(200); // the 120th
 
       const over = await check(reader, r.reportId);
       expect(over.status).toBe(429);
@@ -259,12 +268,14 @@ describe.skipIf(!ENABLED)("the report state check through the real stack", () =>
       expect((await check(reader, r.reportId)).status).toBe(200);
     });
 
-    it("130 calls fired at once by one person: exactly 120 are served and 10 are refused", async () => {
+    it("30 calls fired at once with 100 already used: exactly 20 are served and 10 are refused", async () => {
       await roomInMinute(30);
       const r = await mkReport(orgA, c1.id, ownerA, "draft");
       const reader = await freshReader("burst");
-      const results = await Promise.all(Array.from({ length: 130 }, () => check(reader, r.reportId)));
-      expect(results.filter((x) => x.status === 200)).toHaveLength(STATE_READS_PER_MINUTE);
+      expect((await check(reader, r.reportId)).status).toBe(200);
+      await setUsed(reader, STATE_READS_PER_MINUTE - 20);
+      const results = await Promise.all(Array.from({ length: 30 }, () => check(reader, r.reportId)));
+      expect(results.filter((x) => x.status === 200)).toHaveLength(20);
       expect(results.filter((x) => x.status === 429)).toHaveLength(10);
       const [row] = await h.owner.select().from(schema.readLimitCounters).where(and(eq(schema.readLimitCounters.userId, reader.userId), eq(schema.readLimitCounters.key, "report_state")));
       expect(row.count).toBe(STATE_READS_PER_MINUTE + 1);
