@@ -127,3 +127,38 @@ describe("audit (write behavior)", () => {
     await expect(audit({ organizationId: org }, { action: "auth.login", resourceType: "users", metadata: { email: "a@b.c" } as never })).rejects.toThrow(/not allowed/);
   });
 });
+
+describe("invitation audit rows (feat/invitations)", () => {
+  const id = "22222222-2222-4222-8222-222222222222";
+
+  it("records the invitation id and a role: never the address, the token or its hash", () => {
+    const row = buildAuditRow({ action: "invitation.created", resourceType: "invitation", resourceId: id, metadata: { role: "associate" } });
+    expect(row.metadata).toEqual({ role: "associate" });
+    for (const key of ["email", "token", "token_hash", "address", "name"]) {
+      expect(() => buildAuditRow({ action: "invitation.created", resourceType: "invitation", resourceId: id, metadata: { [key]: "x" } }), key).toThrow(/not allowed/);
+    }
+  });
+
+  it("an owner's refusal (invitation.refused) has one reason: the address already has an account", () => {
+    expect(buildAuditRow({ action: "invitation.refused", resourceType: "invitation", resourceId: id, outcome: "denied", metadata: { reason: "address_in_use" } }).metadata.reason).toBe("address_in_use");
+    for (const bad of ["expired", "Jane", "", "address_in_use "]) {
+      expect(() => buildAuditRow({ action: "invitation.refused", resourceType: "invitation", resourceId: id, outcome: "denied", metadata: { reason: bad } }), bad).toThrow(/invitation refusal/);
+    }
+    expect(() => buildAuditRow({ action: "invitation.refused", resourceType: "invitation", resourceId: id, outcome: "denied" })).toThrow(/invitation refusal/);
+  });
+
+  it("a link that could not be used (invitation.accept_refused) says why from a closed list", () => {
+    for (const reason of ["expired", "revoked", "used", "address_in_use"]) {
+      expect(buildAuditRow({ action: "invitation.accept_refused", resourceType: "invitation", resourceId: id, outcome: "denied", metadata: { reason } }).metadata.reason).toBe(reason);
+    }
+    for (const bad of ["unknown_token", "wrong", "some text"]) {
+      expect(() => buildAuditRow({ action: "invitation.accept_refused", resourceType: "invitation", resourceId: id, outcome: "denied", metadata: { reason: bad } }), bad).toThrow(/invitation refusal/);
+    }
+  });
+
+  it("the invitation actions are on the list", () => {
+    for (const action of ["invitation.created", "invitation.resent", "invitation.revoked", "invitation.accepted", "invitation.refused", "invitation.accept_refused"]) {
+      expect((AUDIT_ACTIONS as readonly string[]).includes(action), action).toBe(true);
+    }
+  });
+});

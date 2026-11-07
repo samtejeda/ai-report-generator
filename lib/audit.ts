@@ -48,6 +48,16 @@ export const AUDIT_ACTIONS = [
   "user.reactivated",
   "assignment.created",
   "assignment.ended",
+  // Invitations (feat/invitations). The invitation id and a role or a closed reason; never the address, never the token.
+  // `.refused` is the inviting owner's attempt for an address that already has an account (in any practice, which is
+  // never said); `.accept_refused` is a known link that could not be used. An unknown link has no practice to
+  // attribute a row to and is an application log line instead.
+  "invitation.created",
+  "invitation.resent",
+  "invitation.revoked",
+  "invitation.accepted",
+  "invitation.refused",
+  "invitation.accept_refused",
   // Reports (feat/report-shell). Report, section-version and template ids and the caller's role; never section text.
   "report.listed",
   "report.viewed",
@@ -81,6 +91,8 @@ export const AUDIT_CLIENT_FIELDS = ["display_name", "date_of_birth", "grade_leve
 export const AUDIT_GENERATION_FAILURES = ["unreachable", "timeout", "bad_response", "invalid_output", "invalid_config", "not_implemented", "stale", "internal"] as const;
 /** The file formats an export can produce; a `format` value outside this list is rejected. PDF joins when it is built. */
 export const AUDIT_EXPORT_FORMATS = ["docx"] as const;
+/** Why an invitation was not used or sent: a code from a closed list. `.refused` allows only the first. */
+export const AUDIT_INVITATION_REFUSALS = ["address_in_use", "expired", "revoked", "used"] as const;
 const MAX_VALUE_LENGTH = 100;
 // An Ollama tag (same character rules as lib/ai/models.ts), so `model` cannot hold free text.
 export const MODEL_TAG = /^(?!.*\/\/)[A-Za-z0-9][A-Za-z0-9._\-:/]{0,99}$/; // no "//", so a URL cannot pass as a tag
@@ -125,6 +137,10 @@ export function buildAuditRow(event: AuditEvent) {
   }
   // An export always says which format left the system.
   if (event.action === "report.exported" && metadata.format === undefined) throw new Error("report.exported needs a format");
+  if (event.action === "invitation.refused" && metadata.reason !== "address_in_use") throw new Error("audit metadata value for reason is not a known invitation refusal");
+  if (event.action === "invitation.accept_refused" && !(AUDIT_INVITATION_REFUSALS as readonly string[]).includes(String(metadata.reason))) {
+    throw new Error("audit metadata value for reason is not a known invitation refusal");
+  }
   return {
     action: event.action,
     resourceType: event.resourceType,
