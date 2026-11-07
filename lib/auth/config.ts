@@ -46,6 +46,16 @@ export const RESET_TOKEN_SECONDS = 60 * 60;
 /** An email verification link is valid for this long. */
 export const VERIFY_EMAIL_SECONDS = 24 * 60 * 60;
 
+/** An invitation link is valid for this long, and only once (an owner's "resend" starts a new period). */
+export const INVITATION_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * Creating or re-sending invitations, per practice. Counted from the practice's own audit rows
+ * (`invitation.created`, `.resent` and `.refused`), so an attempt for an address that already has an
+ * account counts too and a scan for addresses is throttled like real mail.
+ */
+export const INVITATION_LIMITS = { windowSeconds: 60 * 60, maxPerPractice: 20 } as const;
+
 export const PASSWORD_MIN_LENGTH = 12;
 export const PASSWORD_MAX_LENGTH = 128;
 
@@ -64,6 +74,9 @@ export const RATE_LIMITS = {
   changePassword: { window: 15 * 60, max: 5 },
   verifyCode: { window: 15 * 60, max: 10 },
   mfaSetup: { window: 15 * 60, max: 5 },
+  // POST /api/invitations/accept (our own route, not Better Auth's): per client address, every request counts,
+  // never per token or per account.
+  acceptInvitation: { window: 15 * 60, max: 10 },
 } as const;
 
 /**

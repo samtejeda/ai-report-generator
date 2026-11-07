@@ -20,13 +20,14 @@ const colNames = (c: ReturnType<typeof getTableConfig>) => c.columns.map((col) =
 const NO_ORG_FK = new Set(["audit_log"]);
 
 describe("schema conventions", () => {
-  it("covers every CLAUDE.md table (plus read_limit_counters, the per-person read counter)", () => {
+  it("covers every CLAUDE.md table (plus read_limit_counters, the per-person read counter, and invitations)", () => {
     expect(configs.map((c) => c.name).sort()).toEqual(
       [
         "audit_log",
         "client_assignments",
         "client_history",
         "clients",
+        "invitations",
         "jobs",
         "methodology_prompts",
         "organizations",
@@ -299,5 +300,41 @@ describe("auth tables (separate registry, role-separated instead of row-level se
       expect(granted, t).not.toMatch(new RegExp(`\\b${t}\\b`));
     }
     expect(granted).not.toMatch(/purge_client/);
+  });
+});
+
+describe("invitations (migration 0015)", () => {
+  const sql = readFileSync("drizzle/0015_invitations.sql", "utf8");
+  const cfg = byName("invitations");
+
+  it("accepts only the associate role: the database refuses an admin or owner invitation until Sam decides", () => {
+    expect(sql).toContain(`CONSTRAINT "invitations_role_valid" CHECK ("invitations"."role" = 'associate')`);
+    expect(cfg.checks.map((c) => c.name)).toEqual(expect.arrayContaining(["invitations_role_valid", "invitations_email_lowercase", "invitations_token_hash_shape"]));
+  });
+
+  it("stores a hash and nothing that could be a raw token, name or note", () => {
+    expect(colNames(cfg).sort()).toEqual(["accepted_at", "created_at", "email", "expires_at", "id", "invited_by", "organization_id", "revoked_at", "role", "token_hash", "updated_at"]);
+    expect(cfg.uniqueConstraints.map((u) => u.columns.map((c) => c.name).join(","))).toContain("token_hash");
+  });
+
+  it("keeps the inviter inside the practice (composite FK) and allows one pending invitation per address per practice", () => {
+    expect(sql).toMatch(/FOREIGN KEY \("organization_id","invited_by"\) REFERENCES "public"\."users"\("organization_id","id"\)/);
+    expect(sql).toMatch(/CREATE UNIQUE INDEX "invitations_pending_uq" .*\("organization_id","email"\) WHERE .*"accepted_at" is null and .*"revoked_at" is null/);
+  });
+
+  it("gives app_runtime no DELETE and no way to set accepted_at, and auth_runtime nothing at all", () => {
+    const grants = sql.match(/GRANT [^;]*;/g) ?? [];
+    expect(grants.join("\n")).not.toMatch(/DELETE/);
+    expect(grants.join("\n")).not.toMatch(/accepted_at/);
+    expect(grants.join("\n")).not.toMatch(/auth_runtime/);
+    expect(sql).toMatch(/GRANT UPDATE \(token_hash, expires_at, revoked_at, invited_by, updated_at\) ON invitations TO app_runtime/);
+    expect(sql).toContain("REVOKE ALL ON invitations FROM PUBLIC, app_runtime");
+  });
+
+  it("makes a closed invitation final in the database, and keeps updated_at and the organization honest", () => {
+    expect(sql).toMatch(/CREATE TRIGGER invitations_closed_is_final BEFORE UPDATE/);
+    expect(sql).toMatch(/OLD\.accepted_at IS NOT NULL OR OLD\.revoked_at IS NOT NULL/);
+    expect(sql).toMatch(/CREATE TRIGGER invitations_set_updated_at/);
+    expect(sql).toMatch(/CREATE TRIGGER invitations_forbid_org_change/);
   });
 });
