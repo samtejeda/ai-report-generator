@@ -3,6 +3,7 @@ import { eq, getTableName, sql } from "drizzle-orm";
 import { Pool } from "@neondatabase/serverless";
 import { drizzle, type NeonDatabase } from "drizzle-orm/neon-serverless";
 import * as schema from "./schema";
+import { loadActivePrompt } from "@/lib/ai/prompt-loader";
 import { TENANT_TABLES, tenantDb } from "./tenant";
 
 // Integration tests against a scratch Neon branch (D7: the `test` branch of the dev
@@ -988,6 +989,52 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
       const accepted = await fresh(A.orgId, A.userId, mail("accepted"));
       await owner.execute(sql`update invitations set accepted_at = now() where id = ${accepted.id}`);
       await expectPgError(owner.execute(sql`update invitations set accepted_at = null, expires_at = now() + interval '9 days' where id = ${accepted.id}`), "55000");
+    });
+  });
+
+  describe("methodology prompt loader (audit 14 item 4)", () => {
+    // The loader reads through tenantDb on the app_runtime login, as production does. Contents here
+    // are synthetic stand-ins; the practice owner's methodology text is in no fixture.
+    const okContent = { role: "SYNTHETIC ROLE TEXT", constraints: "SYNTHETIC CONSTRAINTS TEXT" };
+
+    async function seedTemplate(t: ReturnType<typeof tenantDb>, userId: string, slug: string, content: Record<string, unknown> | null) {
+      const [tpl] = await t.insert(schema.reportTemplates, { slug, name: `Synthetic ${slug}`, structure: { sections: [] } });
+      if (content === null) return { templateId: tpl.id, promptId: null };
+      const [prompt] = await t.insert(schema.methodologyPrompts, { templateId: tpl.id, versionNumber: 1, content, notes: `synthetic ${slug}`, createdByUserId: userId });
+      await t.update(schema.reportTemplates, tpl.id, { activeMethodologyPromptId: prompt.id });
+      return { templateId: tpl.id, promptId: prompt.id };
+    }
+
+    const refused = (p: Promise<unknown>) => expect(p).rejects.toMatchObject({ name: "PipelineError", code: "methodology_unavailable" });
+
+    it("loads the active prompt version for the template, and follows the pointer when a new version is activated", async () => {
+      const ok = await seedTemplate(tA, A.userId, "loader-ok", okContent);
+      const first = await loadActivePrompt({ organizationId: A.orgId }, ok.templateId, app);
+      expect(first).toEqual({ promptId: ok.promptId, versionNumber: 1, methodology: okContent });
+
+      const [v2] = await tA.insert(schema.methodologyPrompts, { templateId: ok.templateId, versionNumber: 2, content: { role: "SYNTHETIC ROLE TEXT V2" }, notes: "synthetic v2", createdByUserId: A.userId });
+      await tA.update(schema.reportTemplates, ok.templateId, { activeMethodologyPromptId: v2.id });
+      const second = await loadActivePrompt({ organizationId: A.orgId }, ok.templateId, app);
+      expect(second.promptId).toBe(v2.id);
+      expect(second.versionNumber).toBe(2);
+    });
+
+    it("refuses a placeholder prompt, a template with no active prompt, and content that does not parse", async () => {
+      const placeholder = await seedTemplate(tA, A.userId, "loader-placeholder", { placeholder: true });
+      const none = await seedTemplate(tA, A.userId, "loader-none", null);
+      const odd = await seedTemplate(tA, A.userId, "loader-odd", { note: "not a methodology section" });
+      for (const { templateId } of [placeholder, none, odd]) await refused(loadActivePrompt({ organizationId: A.orgId }, templateId, app));
+    });
+
+    it("refuses an unknown or malformed template id", async () => {
+      await refused(loadActivePrompt({ organizationId: A.orgId }, "99999999-9999-4999-8999-999999999999", app));
+      await refused(loadActivePrompt({ organizationId: A.orgId }, "not-a-uuid", app));
+    });
+
+    it("reads only the caller's practice: another practice's template is the same refusal as a missing one", async () => {
+      const b = await seedTemplate(tB, B.userId, "loader-b", okContent);
+      await refused(loadActivePrompt({ organizationId: A.orgId }, b.templateId, app));
+      expect((await loadActivePrompt({ organizationId: B.orgId }, b.templateId, app)).promptId).toBe(b.promptId);
     });
   });
 });
