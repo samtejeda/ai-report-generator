@@ -300,6 +300,15 @@ describe.skipIf(!ENABLED)("the report state check through the real stack", () =>
       expect(lookups(sNone)).toBe(0);
       expect(lookups(sModel)).toBe(0);
       expect(sNone.length).toBe(sOne.length - 1);
+      // Nor on how many sections the report HAS: the same report shape with 14 more sections (20 in all,
+      // the template maximum) costs exactly the same statements, so nothing is read once per section.
+      const wide = await mkReport(orgA, c1.id, ownerA, "draft");
+      await h.owner.insert(schema.reportSections).values(Array.from({ length: 14 }, (_, i) => ({ organizationId: orgA, reportId: wide.reportId, sectionKey: `extra_${i}`, sectionType: "prose" as const, position: 7 + i })));
+      expect(await h.owner.select().from(schema.reportSections).where(eq(schema.reportSections.reportId, wide.reportId))).toHaveLength(20);
+      expect((await run(wide.reportId)).length).toBe(sNone.length);
+      await save(ownerA, wide.reportId, wide.sections[0].id, { text: "x", baseVersion: 0 });
+      expect((await run(wide.reportId)).length).toBe(sOne.length);
+      expect((((await check(ownerA, wide.reportId)).json.data as Data).sections)).toHaveLength(20);
       // The section text is never read from the database for this answer.
       const versionReads = sMany.filter((q) => /from "report_versions"/.test(q));
       expect(versionReads).toHaveLength(1);
