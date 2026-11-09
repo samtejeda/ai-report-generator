@@ -121,7 +121,15 @@ When Tailscale is installed and `tailscale serve` exposes Ollama as an `https://
 
 ## B. Associate and admin (blocked until they can be created)
 
-An associate can now be created by invitation (backend only; no screen yet). An **admin cannot**: admin invitations are undecided, so part B's admin steps (B9 to B12) stay blocked. Sign in as each person in a separate browser profile.
+An associate can now be created by invitation, from the owner screen `/admin/invitations` and the public `/accept-invitation` page (see the screen steps below; the console steps after them still work). An **admin cannot**: admin invitations are undecided, so part B's admin steps (B9 to B12) stay blocked. Sign in as each person in a separate browser profile.
+
+**Invite an associate by the screens** (needs the migrations `0015` and `0016` applied to `dev`; synthetic address only; nothing is sent by email, the link is printed in the dev server terminal):
+
+1. Sign in as the owner (a sign-in from the last 5 minutes is needed to invite: if the screen says so, sign out and in again). Open Practice, then "Invite an associate". Enter `associate-test@example.com` and press "Invite an associate". Expect the sentence "Invitation created. If the address can receive it…" and the invitation in the list as Pending with Resend and Revoke. Inviting an address that already has an account shows the same sentence.
+2. In the terminal running `npm run dev`, find the line starting `[dev email] to=associate-test@example.com` and copy the whole link (`/accept-invitation?token=…`).
+3. Open the link in a separate browser profile (signed out). The address bar changes to `/accept-invitation` at once. Enter a name, a password of 12 or more characters twice (try the Show password buttons) and press "Create account". Expect a move to the sign-in page with "Your account is ready. Sign in now…". Try a short password first: expect a message and the form kept. Reload the accept page after the address bar changed: expect "This invitation link is not valid."
+4. Sign in as the new person; you are sent to set up an authenticator app. Then see no clients. As the owner, assign one (Practice, Client assignments); the new person now sees it.
+5. As the owner, the invitation is now Accepted and has no buttons. Invite another address, press Revoke (confirm), then open its link: expect the same "not valid" sentence as any bad link.
 
 **Invite an associate by hand** (needs the migrations `0015` and `0016` applied to `dev`, which is Sam's go-ahead; synthetic address only, for example `associate-test@example.com`; nothing is sent, the link is printed in the dev server terminal):
 

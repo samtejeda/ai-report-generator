@@ -44,6 +44,11 @@ describe("tooManyAttemptsMessage", () => {
   it("never quotes more than the rate-limit window", () => {
     expect(MAX_WAIT_MINUTES).toBe(15);
   });
+  it("a longer window (the hourly invitation limit) is quoted up to its own cap, never past it", () => {
+    expect(tooManyAttemptsMessage(2400, undefined, 60)).toBe("Too many attempts. Try again in about 40 minutes.");
+    expect(tooManyAttemptsMessage(999_999, undefined, 60)).toBe("Too many attempts. Try again in about 60 minutes.");
+    expect(tooManyAttemptsMessage(2400)).toBe("Too many attempts. Try again in about 15 minutes.");
+  });
 });
 
 describe("captureWait", () => {

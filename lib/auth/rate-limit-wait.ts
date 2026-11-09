@@ -22,10 +22,13 @@ export function waitSecondsFromHeader(value: string | null | undefined): number 
   return Number(trimmed);
 }
 
-/** "Too many attempts. Try again in about N minutes." with N rounded up, at least 1, at most 15. */
-export function tooManyAttemptsMessage(seconds: number | null, fallback: string = TOO_MANY_ATTEMPTS): string {
+/**
+ * "Too many attempts. Try again in about N minutes." with N rounded up, at least 1, at most
+ * `maxMinutes` (15 by default, the auth window; the invitation limit is hourly, so its screen passes 60).
+ */
+export function tooManyAttemptsMessage(seconds: number | null, fallback: string = TOO_MANY_ATTEMPTS, maxMinutes: number = MAX_WAIT_MINUTES): string {
   if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return fallback;
-  const minutes = Math.min(MAX_WAIT_MINUTES, Math.max(1, Math.ceil(seconds / 60)));
+  const minutes = Math.min(maxMinutes, Math.max(1, Math.ceil(seconds / 60)));
   return `Too many attempts. Try again in about ${minutes} ${minutes === 1 ? "minute" : "minutes"}.`;
 }
 
