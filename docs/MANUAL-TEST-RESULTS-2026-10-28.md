@@ -70,6 +70,8 @@ Recommendation: 1 and 2 together.
 
 Server-side checks the browser cannot reach: a 201-character client name (A3.4) and a section of 20 001 characters (A4.5); every role check through the API; the same flows as above. Cautions: sign-in needs the code step, state-changing calls need the app's own `Origin` header, and the sign-in limit applies.
 
+**Superseded 2026-11-09:** the full list (limits, origin, roles, reports and generation, the state check, Word export, invitations, the inference endpoint, auth limits, a second practice) now lives in [POSTMAN-PASS.md](POSTMAN-PASS.md). Nothing in it has been run yet.
+
 ## Retest, 2026-10-31 to 2026-11-06
 
 After the fixes for findings 1 to 14 merged (#66 to #73), Sam re-ran the affected steps on screen and the new `GET /api/reports/{id}/state` check in the browser console, and reported each result.
