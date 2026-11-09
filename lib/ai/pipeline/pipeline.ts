@@ -59,6 +59,13 @@ export type PipelineDeps = {
   loadMethodology: (templateId: string) => Promise<LoadedMethodology>;
   /** RAG SEAM (see context.ts). Defaults to retrieving nothing. */
   retrieveContext?: ContextProvider;
+  /**
+   * Called once, after the filter has said go and before extract: the caller's point of no return
+   * (the route claims the report here). It is awaited, and whatever it throws propagates exactly as
+   * thrown: it is not wrapped, so a refusal by the caller never turns into `internal`. Not called
+   * when the filter stops the run, when a pass fails first, or for empty notes.
+   */
+  onProceed?: () => Promise<void>;
   now?: () => number;
 };
 
@@ -142,6 +149,9 @@ export async function runSectionPipeline(
       passes,
     };
   }
+
+  // The filter said go: the caller's hook runs now, before any more model work. Its failure is not ours to reword.
+  await deps.onProceed?.();
 
   // 2. extract
   const extracted = await runPass({

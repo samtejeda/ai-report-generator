@@ -377,3 +377,88 @@ describe("mergeSensitiveCategories", () => {
     expect(mergeSensitiveCategories(many)).toHaveLength(50);
   });
 });
+
+describe("onProceed: the caller's hook between filter and extract", () => {
+  class CallerRefusal extends Error {}
+
+  it("runs once, after the filter's answer and before the first extract call, and is awaited", async () => {
+    const events: string[] = [];
+    const t = deps([json(filterOk), json(extractOk), json(generateOk)]);
+    const callModel: ModelCall = async (r) => {
+      events.push(`start:${r.role}`);
+      const out = await t.model.callModel(r);
+      events.push(`end:${r.role}`);
+      return out;
+    };
+    const onProceed = async () => {
+      events.push("hook:start");
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      events.push("hook:end");
+    };
+    await runSectionPipeline({ ...t.deps, callModel, onProceed }, { organizationId: ORG }, input);
+    expect(events).toEqual(["start:filter", "end:filter", "hook:start", "hook:end", "start:worker", "end:worker", "start:worker", "end:worker"]);
+  });
+
+  it("is called once even when a later pass has to retry", async () => {
+    const onProceed = vi.fn(async () => {});
+    const t = deps([json(filterOk), "not json", json(extractOk), "not json", json(generateOk)], { onProceed });
+    await runSectionPipeline(t.deps, { organizationId: ORG }, input);
+    expect(onProceed).toHaveBeenCalledTimes(1);
+    expect(t.model.requests).toHaveLength(5);
+  });
+
+  it("is not called when the filter stops the run for thin notes", async () => {
+    const onProceed = vi.fn(async () => {});
+    const t = deps([json({ ...filterOk, sufficient: false })], { onProceed });
+    expect((await runSectionPipeline(t.deps, { organizationId: ORG }, input)).outcome).toBe("insufficient_input");
+    expect(onProceed).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the filter answers badly twice", ["nope", "nope"]],
+    ["the filter's transport fails", [new InferenceError("unreachable")]],
+  ] as [string, Step[]][])("is not called when %s", async (_name, script) => {
+    const onProceed = vi.fn(async () => {});
+    const t = deps(script, { onProceed });
+    await failure(runSectionPipeline(t.deps, { organizationId: ORG }, input));
+    expect(onProceed).not.toHaveBeenCalled();
+  });
+
+  it("is not called for empty notes or an unusable methodology", async () => {
+    const onProceed = vi.fn(async () => {});
+    await runSectionPipeline(deps([], { onProceed }).deps, { organizationId: ORG }, { ...input, notes: "" });
+    const t = deps([json(filterOk)], {
+      onProceed,
+      loadMethodology: async () => {
+        throw new PipelineError("methodology_unavailable");
+      },
+    });
+    await failure(runSectionPipeline(t.deps, { organizationId: ORG }, input));
+    expect(onProceed).not.toHaveBeenCalled();
+  });
+
+  it("lets the hook's own error propagate exactly as thrown, and runs no extract or generate", async () => {
+    const refusal = new CallerRefusal("SYNTHETIC CLAIM REFUSED");
+    const t = deps([json(filterOk), json(extractOk), json(generateOk)], {
+      onProceed: async () => {
+        throw refusal;
+      },
+    });
+    const error = await runSectionPipeline(t.deps, { organizationId: ORG }, input).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(error).toBe(refusal);
+    expect(t.model.requests).toHaveLength(1);
+  });
+
+  it("does not reword a PipelineError the hook throws either", async () => {
+    const refusal = new PipelineError("invalid_config");
+    const t = deps([json(filterOk)], {
+      onProceed: async () => {
+        throw refusal;
+      },
+    });
+    expect(await failure(runSectionPipeline(t.deps, { organizationId: ORG }, input))).toBe(refusal);
+  });
+});

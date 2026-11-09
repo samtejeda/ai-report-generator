@@ -104,6 +104,43 @@ describe("runPipeline: real mode, through the AI SDK transport", () => {
   });
 });
 
+describe("runPipeline: onProceed", () => {
+  it("is awaited once between the filter request and the first extract request", async () => {
+    const { calls, transport } = scriptedFetch(answers.map((a) => JSON.stringify(a)));
+    const seen: number[] = [];
+    await runPipeline(ORG, input, {
+      fetch: transport,
+      loadMethodology,
+      onProceed: async () => {
+        seen.push(calls.length);
+      },
+    });
+    expect(seen).toEqual([1]);
+    expect(calls).toHaveLength(3);
+  });
+
+  it("lets the caller's error through as thrown and sends no extract request", async () => {
+    const { calls, transport } = scriptedFetch(answers.map((a) => JSON.stringify(a)));
+    const refusal = new Error("SYNTHETIC CALLER REFUSAL");
+    const error = await runPipeline(ORG, input, {
+      fetch: transport,
+      loadMethodology,
+      onProceed: async () => {
+        throw refusal;
+      },
+    }).catch((e) => e);
+    expect(error).toBe(refusal);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("is not called when the filter finds the notes thin", async () => {
+    const { transport } = scriptedFetch([JSON.stringify({ ...answers[0], sufficient: false })]);
+    const onProceed = vi.fn(async () => {});
+    await runPipeline(ORG, input, { fetch: transport, loadMethodology, onProceed });
+    expect(onProceed).not.toHaveBeenCalled();
+  });
+});
+
 describe("runPipeline: refusals and failures, with no fallback", () => {
   it("refuses in stub mode (from the environment or the option) before any request or database read", async () => {
     const { calls, transport } = scriptedFetch([]);

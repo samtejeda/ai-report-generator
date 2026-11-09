@@ -172,6 +172,12 @@ export type PipelineRunOptions = {
   fetch?: typeof fetch;
   budgetMs?: number;
   callTimeoutMs?: number;
+  /**
+   * Awaited once, after the filter has said go and before extract: where the caller makes its own
+   * point of no return (the route claims the report here). Its error propagates as thrown. Not
+   * called when the filter stops the run, when a pass fails first, or for empty notes.
+   */
+  onProceed?: () => Promise<void>;
   /** Test seams. Production leaves both unset: the methodology comes from the database, and nothing is retrieved yet. */
   loadMethodology?: (templateId: string) => Promise<LoadedMethodology>;
   retrieveContext?: ContextProvider;
@@ -221,6 +227,7 @@ export async function runPipeline(ctx: TenantContext, input: PipelineInput, opti
       callModel,
       loadMethodology: options.loadMethodology ?? ((templateId) => loadActivePrompt(ctx, templateId)),
       retrieveContext: options.retrieveContext,
+      onProceed: options.onProceed,
     },
     ctx,
     input,
