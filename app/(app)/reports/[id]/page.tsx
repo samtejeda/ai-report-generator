@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { GuardedLink } from "@/components/unsaved/guarded-link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
+import { DownloadButton } from "@/components/reports/download-button";
 import { FinalizeButton } from "@/components/reports/finalize-button";
 import { LocalTime } from "@/components/reports/local-time";
 import { UnsavedSummary } from "@/components/unsaved/unsaved-summary";
@@ -10,6 +11,7 @@ import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/guard";
 import { REPORT_WRITE_ROLES } from "@/lib/auth/permissions";
 import { getReportDetail } from "@/lib/db/report-access";
+import { canOfferExport } from "@/lib/reports/export-download";
 import { canOfferGenerate, isTestModelText } from "@/lib/reports/generate-control";
 import { REPORT_ERROR_NOTE, REPORT_GENERATING_NOTE } from "@/lib/reports/generate-messages";
 import { isEditable } from "@/lib/reports/status";
@@ -64,6 +66,7 @@ async function ReportDetail({ params }: { params: Promise<{ id: string }> }) {
           editedAt={s.editedAt}
         />
       ))}
+      {canOfferExport(session.role) ? <DownloadButton reportId={report.id} status={report.status} /> : null}
       {canWrite && report.status === "generated" ? <FinalizeButton reportId={report.id} /> : null}
     </>
   );

@@ -124,6 +124,10 @@ When Tailscale is installed and `tailscale serve` exposes Ollama as an `https://
 | D6 | Open `/api/health` signed out | `{"status":"ok"}` and nothing else |
 | D7 | Look at your own row on `/admin/users` | No buttons at all (you cannot change, deactivate or reset yourself) |
 | D8 | Start four Generate requests across two reports quickly (with a working endpoint) | At most 2 run at once; the rest get the "try again in N seconds" message |
+| D9 | Open a draft report (any status except finalized) and press **Download Word file** | A new tab opens briefly and the browser saves `report-<report id>.docx` (no client name in the file name); the report tab is unchanged. The note under the button says the file starts with a line that says DRAFT, not finalized. Open the file: that line is its first line and in every page header |
+| D10 | Save a section, then download again | The file holds the saved text. A finalized report shows no DRAFT note and the file has no DRAFT line |
+| D11 | Type in a section without saving, then press **Download Word file** | A popup lists the unsaved sections in red and says the unsaved text will not be in the file. Focus is on **Go back and save**; Esc does the same and puts the cursor in the first unsaved box; no download starts. Press the button again and choose **Download anyway**: the file downloads and what you typed is still in the box. Check at phone width (375px) and with the keyboard only |
+| D12 | Press **Download Word file** 21 times within 10 minutes | The 21st opens a tab with the server's fixed 'Too many requests' sentence (no wait time); the report tab is untouched. The hint under the button names the limit |
 
 ## B. Associate and admin
 
@@ -162,6 +166,7 @@ Also worth trying: invite an address that already has an account (for example yo
 | B10 | Owner | Assign (grant) one client to the admin | Admin sees exactly that client, read only: no "New client", no edit form, no "New report", no Generate, no Finalize |
 | B11 | Admin | Open a report on the granted client | Text readable, nothing editable |
 | B12 | Admin | `/admin` | The 404 page (the screens are owner only; the user list is available to an admin through the API only) |
+| B18 | Admin | Open a report on the granted client | No **Download Word file** link (opening `/api/reports/<id>/export?format=docx` directly is refused with 403); the associate on that client sees the link and a person who cannot see the report gets the 404 page |
 | B13 | Owner | `/admin/users`: change the associate's role to admin, then back | Allowed; the assignments they held stay with them |
 | B14 | Owner | Deactivate the associate | Their next click sends them to sign in; the address stays reserved |
 | B15 | Owner | Reactivate them | They can sign in again with the same password and authenticator |
@@ -245,8 +250,8 @@ First run (owner only, 2026-10-28 to 2026-10-30): see [MANUAL-TEST-RESULTS-2026-
 | A5.1 to A5.5 | | |
 | C1.1 to C1.5 | | |
 | C2.1 to C2.7 | | |
-| D1 to D8 | | |
-| B1 to B17 | | |
+| D1 to D12 | | |
+| B1 to B18 | | |
 | E1 to E3 | | |
 | F1 to F12 | | |
 | G1 to G13 | | |
