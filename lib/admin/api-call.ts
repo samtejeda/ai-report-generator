@@ -5,7 +5,10 @@
  * not reach the server at all. Nothing here is a gate; the route re-checks everything.
  */
 
-export type ApiFailure = { status: number; code: string | null };
+import { waitSecondsFromHeader } from "@/lib/auth/rate-limit-wait";
+
+/** `retryAfterSeconds` is set only on a 429 that carried a usable `Retry-After` header. */
+export type ApiFailure = { status: number; code: string | null; retryAfterSeconds?: number };
 export type ApiResult = { ok: true; status: number } | { ok: false; failure: ApiFailure | null };
 
 export async function readErrorCode(res: Response): Promise<string | null> {
@@ -29,5 +32,10 @@ export async function callAdminApi(url: string, method: "POST" | "PATCH" | "PUT"
     return { ok: false, failure: null };
   }
   if (res.ok) return { ok: true, status: res.status };
-  return { ok: false, failure: { status: res.status, code: await readErrorCode(res) } };
+  const failure: ApiFailure = { status: res.status, code: await readErrorCode(res) };
+  if (res.status === 429) {
+    const wait = waitSecondsFromHeader(res.headers.get("retry-after"));
+    if (wait !== null) failure.retryAfterSeconds = wait;
+  }
+  return { ok: false, failure };
 }

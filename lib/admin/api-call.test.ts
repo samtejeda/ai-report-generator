@@ -40,4 +40,15 @@ describe("callAdminApi", () => {
     stub(new TypeError("failed to fetch"));
     expect(await callAdminApi("/x", "POST")).toEqual({ ok: false, failure: null });
   });
+  it("a 429 carries the Retry-After wait; no other status does, and a bad header is ignored", async () => {
+    const limited = (headers?: Record<string, string>) => Response.json({ error: { code: "rate_limited" } }, { status: 429, headers });
+    stub(limited({ "Retry-After": "2400" }));
+    expect(await callAdminApi("/x", "POST")).toEqual({ ok: false, failure: { status: 429, code: "rate_limited", retryAfterSeconds: 2400 } });
+    stub(limited());
+    expect(await callAdminApi("/x", "POST")).toEqual({ ok: false, failure: { status: 429, code: "rate_limited" } });
+    stub(limited({ "Retry-After": "soon" }));
+    expect(await callAdminApi("/x", "POST")).toEqual({ ok: false, failure: { status: 429, code: "rate_limited" } });
+    stub(Response.json({ error: { code: "conflict" } }, { status: 409, headers: { "Retry-After": "30" } }));
+    expect(await callAdminApi("/x", "POST")).toEqual({ ok: false, failure: { status: 409, code: "conflict" } });
+  });
 });

@@ -1,3 +1,5 @@
+import { INVITATION_LIMITS } from "@/lib/auth/config";
+import { tooManyAttemptsMessage } from "@/lib/auth/rate-limit-wait";
 import type { ApiFailure } from "./api-call";
 
 /**
@@ -7,7 +9,7 @@ import type { ApiFailure } from "./api-call";
  * states (see lib/api/user-change.ts).
  */
 
-export type AdminAction = "change_role" | "deactivate" | "reactivate" | "reset_mfa" | "assign" | "end_assignment" | "set_endpoint" | "clear_endpoint";
+export type AdminAction = "change_role" | "deactivate" | "reactivate" | "reset_mfa" | "assign" | "end_assignment" | "set_endpoint" | "clear_endpoint" | "invite" | "resend_invitation" | "revoke_invitation";
 
 export const REAUTH_MESSAGE = "Your sign-in is more than a few minutes old. Sign out and sign in again, then repeat this.";
 
@@ -25,15 +27,22 @@ export function adminErrorMessage(action: AdminAction, failure: ApiFailure | nul
     case 403:
       return "You do not have access to do this.";
     case 429:
+      // Invitations are limited per practice per hour, so the wait can be up to an hour and says so.
+      if (action === "invite" || action === "resend_invitation") {
+        return tooManyAttemptsMessage(failure.retryAfterSeconds ?? null, "Too many invitations. Wait a while and try again.", INVITATION_LIMITS.windowSeconds / 60);
+      }
       return "Too many attempts. Wait a few minutes and try again.";
     case 404:
+      if (action === "resend_invitation" || action === "revoke_invitation") return "That invitation could not be found any more. Reload the page.";
       return action === "assign"
         ? "That client or person could not be found. Reload the page."
         : "That could not be found any more. Reload the page.";
     case 409:
       if (action === "assign") return "That person already has this client.";
+      if (action === "resend_invitation" || action === "revoke_invitation") return "This invitation was already accepted or revoked, so it cannot be changed. Reload the page.";
       return "This could not be done: the person may be deactivated, may have been changed by someone else, or the practice needs an owner. Reload the page and try again.";
     case 400:
+      if (action === "invite") return "Enter a valid email address.";
       if (action === "set_endpoint") {
         return "That address is not allowed. Use https://<machine>.<tailnet>.ts.net (optional port 443, 8443 or 10000, optional /v1), all lower case.";
       }
