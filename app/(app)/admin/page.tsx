@@ -16,6 +16,11 @@ async function AdminLinks() {
         </Link>
       </li>
       <li>
+        <Link href="/admin/invitations" className="underline">
+          Invite an associate
+        </Link>
+      </li>
+      <li>
         <Link href="/admin/assignments" className="underline">
           Client assignments
         </Link>
