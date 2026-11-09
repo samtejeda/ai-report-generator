@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { drizzle } from "drizzle-orm/neon-serverless";
 import * as schema from "@/lib/db/schema";
-import { AUDIT_ACTIONS, AUDIT_METADATA_KEYS, audit, buildAuditRow } from "./audit";
+import { AUDIT_ACTIONS, AUDIT_EXPORT_FORMATS, AUDIT_METADATA_KEYS, audit, buildAuditRow } from "./audit";
 
 const org = "11111111-1111-4111-8111-111111111111";
 
@@ -89,6 +89,22 @@ describe("generation events (feat/generate-section-stub)", () => {
       expect(() => buildAuditRow({ action: "report.generation_failed", resourceType: "report", metadata: { reason } }), reason).toThrow(/generation failure code/);
     }
     expect(() => buildAuditRow({ action: "report.generation_failed", resourceType: "report" })).toThrow(/generation failure code/);
+  });
+});
+
+describe("export events (feat/report-export-docx)", () => {
+  const exported = { action: "report.exported", resourceType: "report", resourceId: "33333333-3333-4333-8333-333333333333" } as const;
+
+  it("carries the role and a format from the closed list, nothing else", () => {
+    expect([...AUDIT_EXPORT_FORMATS]).toEqual(["docx"]);
+    expect(buildAuditRow({ ...exported, metadata: { role: "owner", format: "docx" } }).metadata).toEqual({ role: "owner", format: "docx" });
+  });
+
+  it("refuses a missing format and any value outside the list (a file name or title cannot get in)", () => {
+    expect(() => buildAuditRow({ ...exported, metadata: { role: "owner" } })).toThrow(/needs a format/);
+    for (const format of ["pdf", "DOCX", "report-1.docx", "Jane Doe.docx", "", true as never, 1 as never]) {
+      expect(() => buildAuditRow({ ...exported, metadata: { format } }), String(format)).toThrow(/export format/);
+    }
   });
 });
 

@@ -117,6 +117,43 @@ export async function listReports(session: SessionContext, filter: ListFilter = 
   return rows.map(toReportView);
 }
 
+/**
+ * A report row (already found under the visibility rule) with its sections and their current text,
+ * in the caller's transaction. Shared by the report read and the export, so both show the same text.
+ * `authors: false` skips the author-name query for a caller that does not show it (authorName is null).
+ */
+export async function readReportDetail(t: Pick<TenantDb, "find">, report: ReportRow, options: { authors?: boolean } = {}): Promise<ReportDetail> {
+  const id = report.id;
+  // The template may have been deleted since; its layout is still needed to title the sections.
+  const [template] = await t.find(reportTemplates, { where: eq(reportTemplates.id, report.templateId), limit: 1, includeDeleted: true });
+  const structure = template ? parseTemplateStructure(template.structure) : null;
+  const titles = new Map(structure?.sections.map((s) => [s.key, s.title]) ?? []);
+  const sections = await t.find(reportSections, { where: eq(reportSections.reportId, id), orderBy: asc(reportSections.position), limit: 200 });
+  const current = await t.find(reportVersions, { where: and(eq(reportVersions.reportId, id), isCurrentVersion), limit: 200 });
+  const names = options.authors === false ? new Map<string, string>() : await authorNames(t, current);
+  const bySection = new Map(current.map((v) => [v.sectionId, v]));
+  return {
+    ...toReportView(report),
+    templateSlug: template?.slug ?? "",
+    sections: sections.map((s): SectionView => {
+      const v = bySection.get(s.id);
+      const content = v ? parseProseContent(v.content) : null;
+      return {
+        id: s.id,
+        key: s.sectionKey,
+        title: titles.get(s.sectionKey) ?? s.sectionKey,
+        type: s.sectionType,
+        position: s.position,
+        text: content?.text ?? "",
+        version: v?.versionNumber ?? 0,
+        editType: v?.editType ?? null,
+        editedAt: v ? v.createdAt.toISOString() : null,
+        authorName: (v?.createdByUserId && names.get(v.createdByUserId)) || null,
+      };
+    }),
+  };
+}
+
 /** One visible report with its sections and their current text, or undefined (respond 404). */
 export async function getReportDetail(session: SessionContext, id: string, db?: Db): Promise<ReportDetail | undefined> {
   if (!uuid.safeParse(id).success) return undefined;
@@ -125,34 +162,7 @@ export async function getReportDetail(session: SessionContext, id: string, db?: 
   return tenantDb({ organizationId: session.organizationId }, db).transaction(async (t) => {
     const [report] = await t.find(reports, { where: and(eq(reports.id, id), visible), limit: 1 });
     if (!report) return undefined;
-    // The template may have been deleted since; its layout is still needed to title the sections.
-    const [template] = await t.find(reportTemplates, { where: eq(reportTemplates.id, report.templateId), limit: 1, includeDeleted: true });
-    const structure = template ? parseTemplateStructure(template.structure) : null;
-    const titles = new Map(structure?.sections.map((s) => [s.key, s.title]) ?? []);
-    const sections = await t.find(reportSections, { where: eq(reportSections.reportId, id), orderBy: asc(reportSections.position), limit: 200 });
-    const current = await t.find(reportVersions, { where: and(eq(reportVersions.reportId, id), isCurrentVersion), limit: 200 });
-    const names = await authorNames(t, current);
-    const bySection = new Map(current.map((v) => [v.sectionId, v]));
-    return {
-      ...toReportView(report),
-      templateSlug: template?.slug ?? "",
-      sections: sections.map((s): SectionView => {
-        const v = bySection.get(s.id);
-        const content = v ? parseProseContent(v.content) : null;
-        return {
-          id: s.id,
-          key: s.sectionKey,
-          title: titles.get(s.sectionKey) ?? s.sectionKey,
-          type: s.sectionType,
-          position: s.position,
-          text: content?.text ?? "",
-          version: v?.versionNumber ?? 0,
-          editType: v?.editType ?? null,
-          editedAt: v ? v.createdAt.toISOString() : null,
-          authorName: (v?.createdByUserId && names.get(v.createdByUserId)) || null,
-        };
-      }),
-    };
+    return readReportDetail(t, report);
   });
 }
 
