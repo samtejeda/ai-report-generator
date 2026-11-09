@@ -46,6 +46,11 @@ const nextConfig: NextConfig = {
         headers: [{ key: "Referrer-Policy", value: "no-referrer" }],
       },
       {
+        // The invitation link carries a one-time token in the query string: never send it as a Referer.
+        source: "/accept-invitation",
+        headers: [{ key: "Referrer-Policy", value: "no-referrer" }],
+      },
+      {
         // Authenticated, tenant-scoped content must never sit in a shared cache.
         // Hashed static assets and optimized images keep their normal long-lived caching.
         source: "/((?!_next/static|_next/image|favicon.ico).*)",

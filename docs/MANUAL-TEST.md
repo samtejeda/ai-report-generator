@@ -14,16 +14,16 @@ Mark each step Pass, Fail or Skip in the results table at the end. For a Fail, w
 | D. Edge cases and abuse | Same | D3 to D7 done. **D1 and D2 not run** (D1 can run now; D2 is a 2-hour wait). **D8 blocked** (Tailscale) |
 | C1. Generate with no endpoint set; an endpoint the server must refuse | Same | **Done** |
 | C2. Generate that succeeds, then edit and Finalize | Tailscale on this machine, `tailscale serve` in front of Ollama, the endpoint set on the practice | **Blocked: Tailscale is not installed here.** A report only becomes `generated` when generation succeeds, so Finalize (and the Finalize-with-unsaved-text check, #87) cannot be reached without it |
-| B. Associate roles | An associate user | **Can run now, by hand:** invitations are merged (#84) and `0015` and `0016` are on `dev`; use the "Invite an associate by hand" steps. The invitation screens are in a pull request (see G); once merged, use those instead |
+| B. Associate roles | An associate user | **Can run now, by hand:** invitations are merged (#84) and `0015` and `0016` are on `dev`; use the "Invite an associate by hand" steps. The invitation screens are merged (#90); use the screen steps in B (G below is the longer checklist for them) |
 | B. Admin steps (B9 to B12) | An admin user | **Not run, on purpose.** Sam's decision (2026-11-09): only the owner and associate roles are in use; the admin role may not be needed. The steps stay in this file in case it comes back |
 | F. Word export, by address (no button yet) | A report with some saved text | **Can run now** (#85 is merged); the draft case only, since a finalized report needs C2 |
-| G. Invitation screens | The `feat/invitations-ui` pull request merged | **Not built yet (in progress 2026-11-09).** The builder's click-through list goes into this file when it merges |
+| G. Invitation screens | Merged (#90, 2026-11-09) | **Can run now.** The builder's short click-through is in B ("Invite an associate by the screens"); G is the fuller list |
 | H. Export button | The `feat/export-button` pull request merged | **Not built yet** (starts after G) |
 | E. A second practice cannot see the first | A second practice made by `bootstrap-owner.mjs` on `dev` | Optional; a database write on the shared `dev` database, so only with Sam's go-ahead (dry run first, host checked) |
 
 Roles are still covered in CI at the route level (`authz.integration.test.ts`, 31 tests, and the admin and client suites), so part B is about the screens, not about whether access control holds.
 
-**Everything not yet run, in one place (2026-11-09).** Browser: A1.6, D1, D2, C2.1 to C2.7, D8, Finalize with unsaved text (needs a `generated` report), the refused-save screen with two tabs (optional; the feature may be removed, decisions row 15), B1 to B8 and B13 to B17 (admin steps B9 to B12 skipped), E1 to E3, F1 to F10, G (after it merges), H (after it merges). Server-side checks the browser cannot reach are in [POSTMAN-PASS.md](POSTMAN-PASS.md), none run yet.
+**Everything not yet run, in one place (2026-11-09).** Browser: A1.6, D1, D2, C2.1 to C2.7, D8, Finalize with unsaved text (needs a `generated` report), the refused-save screen with two tabs (optional; the feature may be removed, decisions row 15), B1 to B8 and B13 to B17 (admin steps B9 to B12 skipped), E1 to E3, F1 to F10, G (can run now), H (after it merges). Server-side checks the browser cannot reach are in [POSTMAN-PASS.md](POSTMAN-PASS.md), none run yet.
 
 ## 0. Setup
 
@@ -127,7 +127,15 @@ When Tailscale is installed and `tailscale serve` exposes Ollama as an `https://
 
 ## B. Associate and admin
 
-An associate can now be created by invitation (backend only until the invitation screens merge; see G). The admin role is not in use (Sam, 2026-11-09: only owner and associate), so its steps are skipped. Only the owner and associate roles are in use (Sam, 2026-11-09), so skip B9 to B12 and the "to admin" half of B13. Sign in as each person in a separate browser profile.
+An associate can now be created by invitation, from the owner screen `/admin/invitations` and the public `/accept-invitation` page (see the screen steps below; the console steps after them still work). The admin role is not in use (Sam, 2026-11-09: only owner and associate), so skip B9 to B12 and the "to admin" half of B13. Sign in as each person in a separate browser profile.
+
+**Invite an associate by the screens** (needs the migrations `0015` and `0016` applied to `dev`; synthetic address only; nothing is sent by email, the link is printed in the dev server terminal):
+
+1. Sign in as the owner (a sign-in from the last 5 minutes is needed to invite: if the screen says so, sign out and in again). Open Practice, then "Invite an associate". Enter `associate-test@example.com` and press "Invite an associate". Expect the sentence "Invitation created. If the address can receive it…" and the invitation in the list as Pending with Resend and Revoke. Inviting an address that already has an account shows the same sentence.
+2. In the terminal running `npm run dev`, find the line starting `[dev email] to=associate-test@example.com` and copy the whole link (`/accept-invitation?token=…`).
+3. Open the link in a separate browser profile (signed out). The address bar changes to `/accept-invitation` at once. Enter a name, a password of 12 or more characters twice (try the Show password buttons) and press "Create account". Expect a move to the sign-in page with "Your account is ready. Sign in now…". Try a short password first: expect a message and the form kept. Reload the accept page after the address bar changed: expect "This invitation link is not valid."
+4. Sign in as the new person; you are sent to set up an authenticator app. Then see no clients. As the owner, assign one (Practice, Client assignments); the new person now sees it.
+5. As the owner, the invitation is now Accepted and has no buttons. Invite another address, press Revoke (confirm), then open its link: expect the same "not valid" sentence as any bad link.
 
 **Invite an associate by hand** (needs the migrations `0015` and `0016` applied to `dev`, which is Sam's go-ahead; synthetic address only, for example `associate-test@example.com`; nothing is sent, the link is printed in the dev server terminal):
 
@@ -191,9 +199,9 @@ The route is merged (#85) but no screen calls it yet. Open a report page, copy i
 
 The 21st export in 10 minutes is a 429 (limit 20 per person); that is in [POSTMAN-PASS.md](POSTMAN-PASS.md) because it takes a script.
 
-## G. Invitation screens (not built yet; fill in when `feat/invitations-ui` merges)
+## G. Invitation screens (merged in #90, 2026-11-09)
 
-The builder's own click-through list goes here and replaces this skeleton. What it must cover, from the request:
+The builder's short click-through is in part B, "Invite an associate by the screens". This is the fuller checklist for the same screens, from the request:
 
 | # | Do | Expect |
 |---|---|---|

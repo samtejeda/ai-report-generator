@@ -32,6 +32,9 @@ export default function UsersPage() {
         Back to practice
       </Link>
       <h1 className="text-xl font-semibold">People</h1>
+      <Link href="/admin/invitations" className="text-sm underline">
+        Invite an associate
+      </Link>
       <Suspense fallback={<p className="text-sm">Loading…</p>}>
         <People />
       </Suspense>

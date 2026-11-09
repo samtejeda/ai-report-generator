@@ -73,7 +73,7 @@ describe("route handlers", () => {
 
 describe("pages", () => {
   it("the scan finds the pages we know about", () => {
-    expect(pages.map(urlPath).sort()).toEqual(["/", "/account", "/account/mfa", "/admin", "/admin/assignments", "/admin/inference-endpoint", "/admin/users", "/clients", "/clients/new", "/clients/{id}", "/forgot-password", "/login", "/reports/{id}", "/reset-password"]);
+    expect(pages.map(urlPath).sort()).toEqual(["/", "/accept-invitation", "/account", "/account/mfa", "/admin", "/admin/assignments", "/admin/inference-endpoint", "/admin/invitations", "/admin/users", "/clients", "/clients/new", "/clients/{id}", "/forgot-password", "/login", "/reports/{id}", "/reset-password"]);
   });
 
   const publicPagePaths = new Set(PUBLIC_PAGES.map((p) => p.path));
@@ -103,6 +103,7 @@ describe("pages", () => {
     for (const file of ["app/login/page.tsx", "app/forgot-password/page.tsx"]) expect(read(file), file).toMatch(/SignedOutOnly/);
     expect(read("components/auth/signed-out-only.tsx")).toMatch(/leaveIfSignedIn\(/);
     expect(read("app/reset-password/page.tsx")).toMatch(/leaveIfSignedIn\(\{\s*resetLink:/);
+    expect(read("app/accept-invitation/page.tsx")).toMatch(/leaveIfSignedIn\(\{\s*resetLink:/);
     for (const file of ["lib/auth/visitor.ts", "lib/auth/landing.ts", "components/auth/signed-out-only.tsx"]) {
       expect(read(file), file).not.toMatch(/tenantDb|client-access|@\/lib\/db/);
     }

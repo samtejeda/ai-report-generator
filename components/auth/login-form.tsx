@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth/client";
 import { HOME_PATH } from "@/lib/auth/landing";
@@ -14,8 +14,10 @@ import { PasswordField } from "./password-field";
 
 // Fixed messages only (lib/auth/login-messages.ts): never echo what the server said, and never
 // reveal whether an address has an account.
-export function LoginForm() {
+export function LoginForm({ notice: initialNotice = null }: { notice?: string | null }) {
   const router = useRouter();
+  // "Now sign in", shown once after an invitation was accepted (lib/auth/login-notice.ts).
+  const [notice, setNotice] = useState(initialNotice);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   // The password was accepted and a code is needed. The password is not kept in the page.
@@ -28,12 +30,18 @@ export function LoginForm() {
   // Next keeps this page alive and hidden after sign-in and restores it: without this, coming back
   // shows the old code step with the button stuck on "Checking…". Nothing typed here is a draft.
   useResetWhenHidden(() => {
+    setNotice(null);
     setMessage(null);
     setPending(false);
     setCodeStep(false);
     setUseBackup(false);
     setEmail("");
   });
+
+  useEffect(() => {
+    // The flag has done its job: a reload or a copied address does not show the notice again.
+    if (initialNotice) window.history.replaceState(null, "", "/login");
+  }, [initialNotice]);
 
   function finish() {
     // The cookie is already stored; refresh so server components render for the new session.
@@ -46,6 +54,7 @@ export function LoginForm() {
     const form = new FormData(event.currentTarget);
     const typedEmail = String(form.get("email") ?? "");
     setPending(true);
+    setNotice(null);
     setMessage(null);
     // The wait time of a 429 comes from its X-Retry-After header (lib/auth/rate-limit-wait.ts).
     const wait = captureWait();
@@ -144,6 +153,7 @@ export function LoginForm() {
 
   return (
     <form ref={resetFormWhenHidden} onSubmit={onSubmit} className="flex flex-col gap-3">
+      {notice ? <p role="status" className="text-sm">{notice}</p> : null}
       <label className="flex flex-col gap-1 text-sm">
         Email
         <input name="email" type="email" autoComplete="username" required defaultValue={email} className={fieldClass} />
