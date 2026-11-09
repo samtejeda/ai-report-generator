@@ -37,13 +37,28 @@ describe("one door to the model", () => {
     expect(offenders).toEqual([path.join("lib", "ai", "inference.ts")]);
   });
 
-  it("nothing outside lib/ai uses the pipeline yet (the route is not wired to it in this change)", () => {
-    const offenders = all
-      .filter((f) => !f.file.startsWith(path.join("lib", "ai") + path.sep))
-      .filter((f) => /\brunPipeline\b|\blib\/ai\/pipeline\b|\blib\/ai\/prompt-loader\b/.test(f.text))
-      // The integration test imports the loader directly; it is a test, so it is excluded above.
-      .map((f) => f.file);
-    expect(offenders).toEqual([]);
+  // The one file allowed to call the pipeline (the real-mode generate flow, built in the route change).
+  // It does not exist yet, so today nothing outside lib/ai uses the pipeline; when it lands this still
+  // holds. It reaches the pipeline through lib/ai/inference.ts only.
+  const PIPELINE_CALLER = path.join("lib", "reports", "generate-pipeline.ts");
+  const outsideAi = all.filter((f) => !f.file.startsWith(path.join("lib", "ai") + path.sep));
+
+  it("exactly one file outside lib/ai may call runPipeline: lib/reports/generate-pipeline.ts", () => {
+    const callers = outsideAi.filter((f) => /\brunPipeline\b/.test(f.text)).map((f) => f.file);
+    expect(callers.filter((f) => f !== PIPELINE_CALLER)).toEqual([]);
+  });
+
+  it("nobody outside lib/ai, that one file included, reaches into the pipeline or the loader directly", () => {
+    const deep = outsideAi.filter((f) => /\blib\/ai\/pipeline\b|\blib\/ai\/prompt-loader\b|\blib\/ai\/errors\b/.test(f.text)).map((f) => f.file);
+    expect(deep).toEqual([]);
+  });
+
+  it("the one allowed caller, if it exists, imports lib/ai only through inference.ts", () => {
+    const caller = outsideAi.find((f) => f.file === PIPELINE_CALLER);
+    if (!caller) return;
+    const imports = [...caller.text.matchAll(/from\s+["']@\/lib\/ai\/([^"']+)["']/g)].map((m) => m[1]);
+    expect(imports.length).toBeGreaterThan(0);
+    expect(imports.every((i) => i === "inference")).toBe(true);
   });
 
   it("the pipeline modules reach no network, database, SDK or inference.ts: the model is injected", () => {
