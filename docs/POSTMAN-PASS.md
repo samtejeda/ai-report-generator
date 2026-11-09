@@ -16,7 +16,7 @@ Mark each row Pass, Fail or Skip in the results table at the end. For a Fail wri
 4. **Limits are real and per person or per address.** Space the runs out; the sign-in limit (10 per 15 minutes per address) counts every request. Some rows below need a runner with no delay (P12); everything else is one call at a time.
 5. **Invitation links print in the dev terminal** (`[dev email] to=... token=...`). The token is 43 characters. Never put a token in a note.
 6. **Do not leave a fake inference endpoint set.** Clear it (`PUT` with `{"endpoint": null}`) when you finish P9.
-7. Use a **second browser profile with a second cookie** for the associate (and the admin, made by a role change, see MANUAL-TEST.md B13). Name the Postman cookie jars `owner`, `associate`, `admin`.
+7. Use a **second browser profile with a second cookie** for the associate. **The admin role is not in use (Sam, 2026-11-09: only owner and associate), so every row that says Admin is skipped**; the rows stay in case the role comes back, and CI keeps proving them. Name the Postman cookie jars `owner` and `associate`.
 8. Some rows need an associate (invitation by hand, MANUAL-TEST.md B), a `generated` report (blocked until the inference endpoint exists, C2) or a second practice (MANUAL-TEST.md E, Sam's go-ahead). Those are marked **needs: ...**.
 
 ## P1. Limits the browser hides (finding A3.4 and A4.5 from the first run)
@@ -51,7 +51,7 @@ Mark each row Pass, Fail or Skip in the results table at the end. For a Fail wri
 | P2.6 | A made-up path under `/api/auth/` (for example `/api/auth/sign-up/email`, `/api/auth/get-session`, `/api/auth/list-sessions`) | 404 (only the twelve listed auth routes exist) |
 | P2.7 | `POST /api/invitations/accept` with a wrong `Origin` | 403 (own origin required even though it is public) |
 
-## P3. Roles through the API (needs: associate; an admin through a role change)
+## P3. Roles through the API (needs: associate; Admin rows skipped, the role is not in use)
 
 CI proves this in `authz.integration.test.ts` and the admin and client suites; this is the by-hand confirmation. Expected status as the role in the first column:
 

@@ -15,7 +15,7 @@ Mark each step Pass, Fail or Skip in the results table at the end. For a Fail, w
 | C1. Generate with no endpoint set; an endpoint the server must refuse | Same | **Done** |
 | C2. Generate that succeeds, then edit and Finalize | Tailscale on this machine, `tailscale serve` in front of Ollama, the endpoint set on the practice | **Blocked: Tailscale is not installed here.** A report only becomes `generated` when generation succeeds, so Finalize (and the Finalize-with-unsaved-text check, #87) cannot be reached without it |
 | B. Associate roles | An associate user | **Can run now, by hand:** invitations are merged (#84) and `0015` and `0016` are on `dev`; use the "Invite an associate by hand" steps. The invitation screens are in a pull request (see G); once merged, use those instead |
-| B. Admin steps (B9 to B12) | An admin user | **Can run now, with a role change** (not an invitation): invite an associate, then in B13 the owner changes that person's role to admin on `/admin/users`. Admin *invitations* stay undecided (decisions row 16) |
+| B. Admin steps (B9 to B12) | An admin user | **Not run, on purpose.** Sam's decision (2026-11-09): only the owner and associate roles are in use; the admin role may not be needed. The steps stay in this file in case it comes back |
 | F. Word export, by address (no button yet) | A report with some saved text | **Can run now** (#85 is merged); the draft case only, since a finalized report needs C2 |
 | G. Invitation screens | The `feat/invitations-ui` pull request merged | **Not built yet (in progress 2026-11-09).** The builder's click-through list goes into this file when it merges |
 | H. Export button | The `feat/export-button` pull request merged | **Not built yet** (starts after G) |
@@ -23,7 +23,7 @@ Mark each step Pass, Fail or Skip in the results table at the end. For a Fail, w
 
 Roles are still covered in CI at the route level (`authz.integration.test.ts`, 31 tests, and the admin and client suites), so part B is about the screens, not about whether access control holds.
 
-**Everything not yet run, in one place (2026-11-09).** Browser: A1.6, D1, D2, C2.1 to C2.7, D8, Finalize with unsaved text (needs a `generated` report), the refused-save screen with two tabs (optional; the feature may be removed, decisions row 15), B1 to B17, E1 to E3, F1 to F9, G (after it merges), H (after it merges). Server-side checks the browser cannot reach are in [POSTMAN-PASS.md](POSTMAN-PASS.md), none run yet.
+**Everything not yet run, in one place (2026-11-09).** Browser: A1.6, D1, D2, C2.1 to C2.7, D8, Finalize with unsaved text (needs a `generated` report), the refused-save screen with two tabs (optional; the feature may be removed, decisions row 15), B1 to B8 and B13 to B17 (admin steps B9 to B12 skipped), E1 to E3, F1 to F10, G (after it merges), H (after it merges). Server-side checks the browser cannot reach are in [POSTMAN-PASS.md](POSTMAN-PASS.md), none run yet.
 
 ## 0. Setup
 
@@ -127,7 +127,7 @@ When Tailscale is installed and `tailscale serve` exposes Ollama as an `https://
 
 ## B. Associate and admin
 
-An associate can now be created by invitation (backend only until the invitation screens merge; see G). An admin cannot be *invited* (undecided), but one can be made by step B13: invite an associate, then have the owner change that person's role to admin on `/admin/users`. Run B1 to B8 first as the associate, then B13, then B9 to B12 as the same person with the admin role, then change them back. Sign in as each person in a separate browser profile.
+An associate can now be created by invitation (backend only until the invitation screens merge; see G). The admin role is not in use (Sam, 2026-11-09: only owner and associate), so its steps are skipped. Only the owner and associate roles are in use (Sam, 2026-11-09), so skip B9 to B12 and the "to admin" half of B13. Sign in as each person in a separate browser profile.
 
 **Invite an associate by hand** (needs the migrations `0015` and `0016` applied to `dev`, which is Sam's go-ahead; synthetic address only, for example `associate-test@example.com`; nothing is sent, the link is printed in the dev server terminal):
 
@@ -186,7 +186,7 @@ The route is merged (#85) but no screen calls it yet. Open a report page, copy i
 | F8 | Change the address to `format=pdf`, then remove `format`, then add `&x=1` | Each shows a JSON error (validation failed), no file |
 | F9 | Open the export address while signed out | Sent to `/login`; no file |
 | F10 | Export a **finalized** report | No `DRAFT` line, no header (blocked until C2) |
-| F11 | As an admin (even with a grant on that client): open the export address | Refused (403); the owner's audit shows `authz.denied` (blocked until an admin exists, see B) |
+| F11 | As an admin (even with a grant on that client): open the export address | Refused (403); the owner's audit shows `authz.denied`. **Skipped: the admin role is not in use** |
 | F12 | As an associate not assigned to that client | The same 404 as a made-up report (needs B) |
 
 The 21st export in 10 minutes is a 429 (limit 20 per person); that is in [POSTMAN-PASS.md](POSTMAN-PASS.md) because it takes a script.
@@ -218,7 +218,7 @@ Sending real mail is not built (Resend, decisions row 8): the link only appears 
 | # | Do | Expect |
 |---|---|---|
 | H1 | Open a report as the owner and as an assigned associate | The "Download Word file" button is there |
-| H2 | Open a report as an admin | No button |
+| H2 | Open a report as an admin | No button. **Skipped: the admin role is not in use** |
 | H3 | Type in a section, do not save, press the button | A red list names the unsaved sections and says their text will not be in the file; "Go back and save" is the default (Esc and the focused button); "Download anyway" is the second choice and does download |
 | H4 | Read near the button | A plain sentence that a report not finalized downloads with a "DRAFT, not finalized" line |
 | H5 | Press the button 21 times in 10 minutes | A short wait message, no raw error |
