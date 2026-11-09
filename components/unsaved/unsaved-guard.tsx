@@ -4,6 +4,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
 import { classifyLink, isPlainLeftClick } from "@/lib/ui/link-guard";
 import { LEAVE_BUTTON, LEAVE_DIALOG_HEADING, LEAVE_DIALOG_WARNING, leaveDialogIntro, STAY_BUTTON, unsavedTitles } from "@/lib/reports/unsaved";
+import { UnsavedList } from "./unsaved-list";
 import { unsavedStore } from "@/lib/ui/unsaved-store";
 import { focusSectionBox } from "./focus-section-box";
 import { useUnsavedSections } from "./use-unsaved";
@@ -100,12 +101,7 @@ export function UnsavedGuard() {
           <h2 id="unsaved-dialog-heading" className="text-base font-semibold">
             {LEAVE_DIALOG_HEADING}
           </h2>
-          <p>{leaveDialogIntro(titles.length)}</p>
-          <ul className="list-inside list-disc text-red-700">
-            {titles.map((title, i) => (
-              <li key={i}>{title}</li>
-            ))}
-          </ul>
+          <UnsavedList intro={leaveDialogIntro(titles.length)} titles={titles} />
           <p>{LEAVE_DIALOG_WARNING}</p>
           <div className="flex flex-col gap-2">
             <Button ref={stayRef} type="button" onClick={stay}>
