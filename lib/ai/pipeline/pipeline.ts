@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { PipelineError } from "../errors";
 import { boundContext, noContext, type ContextProvider } from "./context";
-import type { LoadedMethodology } from "./methodology";
+import { mergeSensitiveCategories, type LoadedMethodology } from "./methodology";
 import { createBudget, runPass, type ModelCall, type PassMetadata } from "./passes";
 import { buildExtractPrompt, buildFilterPrompt, buildGeneratePrompt } from "./prompts";
 import {
@@ -21,6 +21,10 @@ import {
  * sensitive), extract (structured fields from the notes), generate (the section, from the
  * methodology plus the extracted fields plus per-request context). Each pass is its own narrow
  * prompt and its own model role; none does another's job.
+ *
+ * The methodology is loaded FIRST, before any model is asked anything, so an unusable one (none, a
+ * placeholder, content that does not parse) fails before a single model call. Its optional
+ * `sensitive_categories` list goes to the filter pass and nowhere else.
  *
  * Not enough input is a normal result, not an error: the section comes back as `[Please provide]`
  * with an `insufficient_input` flag, and the later passes do not run.
@@ -51,7 +55,7 @@ export type PipelineInput = z.input<typeof pipelineInputSchema>;
 
 export type PipelineDeps = {
   callModel: ModelCall;
-  /** Loads the active methodology for a template, within the caller's practice. Throws PipelineError("methodology_unavailable"). */
+  /** Loads the methodology for a template, within the caller's practice. Throws PipelineError("methodology_unavailable"). */
   loadMethodology: (templateId: string) => Promise<LoadedMethodology>;
   /** RAG SEAM (see context.ts). Defaults to retrieving nothing. */
   retrieveContext?: ContextProvider;
@@ -100,12 +104,23 @@ export async function runSectionPipeline(
   const callTimeoutMs = options.callTimeoutMs ?? PIPELINE_CALL_TIMEOUT_MS;
   const passes: PassMetadata[] = [];
 
+  // 0. The practice's methodology for every candidate template (a report has one), through the
+  // tenant data layer, before any model call.
+  const loadedByTemplate = new Map<string, LoadedMethodology>();
+  for (const t of templates) {
+    try {
+      loadedByTemplate.set(t.id, await deps.loadMethodology(t.id));
+    } catch (error) {
+      throw error instanceof PipelineError ? error : new PipelineError("internal");
+    }
+  }
+
   // 1. filter
   const candidates = templates.map((t) => t.slug);
   const filtered = await runPass({
     pass: "filter",
     schema: filterAnswerSchema,
-    prompt: buildFilterPrompt({ candidates, section, notes }),
+    prompt: buildFilterPrompt({ candidates, section, notes, sensitiveCategories: mergeSensitiveCategories([...loadedByTemplate.values()].map((l) => l.methodology)) }),
     check: (a) => candidates.includes(a.template),
     callModel: deps.callModel,
     callTimeoutMs,
@@ -113,7 +128,8 @@ export async function runSectionPipeline(
   });
   passes.push(filtered.meta);
   const template = templates.find((t) => t.slug === filtered.data.template);
-  if (!template) throw new PipelineError("internal", "filter");
+  const loaded = template ? loadedByTemplate.get(template.id) : undefined;
+  if (!template || !loaded) throw new PipelineError("internal", "filter");
   const sensitive = filtered.data.sensitive_content_detected;
 
   if (!filtered.data.sufficient) {
@@ -125,14 +141,6 @@ export async function runSectionPipeline(
       missingFields: filtered.data.missing_fields,
       passes,
     };
-  }
-
-  // The practice's methodology for the chosen template, through the tenant data layer.
-  let loaded: LoadedMethodology;
-  try {
-    loaded = await deps.loadMethodology(template.id);
-  } catch (error) {
-    throw error instanceof PipelineError ? error : new PipelineError("internal");
   }
 
   // 2. extract

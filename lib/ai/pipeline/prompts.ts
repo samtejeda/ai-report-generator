@@ -62,10 +62,23 @@ export const RETRY_NOTE = "\n\nYour previous reply could not be used. Reply with
 /** Only the key is sent to a model: it is a closed pattern (see pipeline.ts), so it cannot carry text. */
 export type SectionRef = { key: string };
 
-export function buildFilterPrompt(input: { candidates: string[]; section: SectionRef; notes: string }): PassPrompt {
+/**
+ * `sensitiveCategories` come from the practice's methodology in the database (never from TS). They
+ * are sent as one labelled data line beside the candidates, outside the notes fence. The task
+ * wording above is deliberately unchanged: whether a small model makes good use of the list is a
+ * Phase B check, not something this prompt tries to force. With no list, the prompt is exactly what
+ * it was before the list existed.
+ */
+export function buildFilterPrompt(input: { candidates: string[]; section: SectionRef; notes: string; sensitiveCategories?: string[] }): PassPrompt {
+  const categories = input.sensitiveCategories ?? [];
   return {
     system: FILTER_INSTRUCTIONS,
-    prompt: [`Candidate templates: ${input.candidates.join(", ")}`, `Named section: ${input.section.key}`, fence("NOTES", input.notes)].join("\n"),
+    prompt: [
+      `Candidate templates: ${input.candidates.join(", ")}`,
+      ...(categories.length > 0 ? [`Sensitive categories: ${categories.join(", ")}`] : []),
+      `Named section: ${input.section.key}`,
+      fence("NOTES", input.notes),
+    ].join("\n"),
   };
 }
 

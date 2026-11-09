@@ -3,7 +3,7 @@ import { InferenceError, PipelineError, toGenerationFailure, type PipelineErrorC
 import { AUDIT_GENERATION_FAILURES } from "@/lib/audit";
 import type { ModelCall, ModelCallRequest } from "./passes";
 import { MAX_NOTES_CHARS, runSectionPipeline, type PipelineDeps, type PipelineInput } from "./pipeline";
-import { parseMethodologyContent } from "./methodology";
+import { mergeSensitiveCategories, parseMethodologyContent } from "./methodology";
 import { RETRY_NOTE } from "./prompts";
 import { PLEASE_PROVIDE } from "./schemas";
 
@@ -104,7 +104,9 @@ describe("insufficient input is a normal result, flags and not text", () => {
     expect(result.missingFields).toEqual(["test_scores", "quotes"]);
     expect(result.methodologyPromptId).toBeNull();
     expect(t.model.requests).toHaveLength(1);
-    expect(t.loadMethodology).not.toHaveBeenCalled();
+    // Loaded before the filter (so an unusable one fails first), but no generation used it.
+    expect(t.loadMethodology).toHaveBeenCalledTimes(1);
+    expect(result.methodologyPromptId).toBeNull();
   });
 
   it("keeps the sensitive flag next to insufficient_input", async () => {
@@ -156,7 +158,7 @@ describe("a bad answer fails cleanly", () => {
     expect(error.code).toBe("invalid_output");
     expect(error.pass).toBe("filter");
     expect(t.model.requests).toHaveLength(2);
-    expect(t.loadMethodology).not.toHaveBeenCalled();
+    expect(t.loadMethodology).toHaveBeenCalledTimes(1);
   });
 
   it("retries a later pass on its own and fails there", async () => {
@@ -195,7 +197,7 @@ describe("transport and configuration failures: clear, once, no fallback", () =>
     expect(error.message).not.toContain("SECRET");
   });
 
-  it("refuses with methodology_unavailable and does not extract or generate", async () => {
+  it("refuses with methodology_unavailable before any model call", async () => {
     const t = deps([json(filterOk), json(extractOk), json(generateOk)], {
       loadMethodology: async () => {
         throw new PipelineError("methodology_unavailable");
@@ -203,7 +205,7 @@ describe("transport and configuration failures: clear, once, no fallback", () =>
     });
     const error = await failure(runSectionPipeline(t.deps, { organizationId: ORG }, input));
     expect(error.code).toBe("methodology_unavailable");
-    expect(t.model.requests).toHaveLength(1);
+    expect(t.model.requests).toHaveLength(0);
   });
 
   it("reports an unexpected loader failure as internal, not as a missing methodology", async () => {
@@ -286,5 +288,92 @@ describe("failure codes map onto the existing audit list", () => {
   const codes: PipelineErrorCode[] = ["unreachable", "timeout", "bad_response", "not_implemented", "invalid_config", "methodology_unavailable", "invalid_output", "invalid_input", "internal"];
   it.each(codes)("%s", (code) => {
     expect(AUDIT_GENERATION_FAILURES as readonly string[]).toContain(toGenerationFailure(code));
+  });
+});
+
+describe("the methodology loads before the filter, and its sensitive categories reach the filter only", () => {
+  // Synthetic stand-ins; the practice's real list lives in the database.
+  const withCategories = (cats: string[]) => async () => ({
+    promptId: PROMPT_ID,
+    versionNumber: 1,
+    methodology: parseMethodologyContent({ role: "SYNTHETIC ROLE TEXT", sensitive_categories: cats })!,
+  });
+
+  it("loads first: the loader runs before the first model request", async () => {
+    const order: string[] = [];
+    const t = deps([json(filterOk), json(extractOk), json(generateOk)]);
+    const callModel: ModelCall = async (r) => {
+      order.push(`model:${r.role}`);
+      return t.model.callModel(r);
+    };
+    const loadMethodology = async (id: string) => {
+      order.push("load");
+      return t.loadMethodology(id);
+    };
+    await runSectionPipeline({ ...t.deps, callModel, loadMethodology }, { organizationId: ORG }, input);
+    expect(order).toEqual(["load", "model:filter", "model:worker", "model:worker"]);
+  });
+
+  it("fails with zero model calls when the methodology is unusable, whatever the notes say", async () => {
+    for (const notes of [input.notes, "x".repeat(50)]) {
+      const t = deps([json(filterOk)], {
+        loadMethodology: async () => {
+          throw new PipelineError("methodology_unavailable");
+        },
+      });
+      const error = await failure(runSectionPipeline(t.deps, { organizationId: ORG }, { ...input, notes }));
+      expect(error.code).toBe("methodology_unavailable");
+      expect(t.model.requests).toHaveLength(0);
+    }
+  });
+
+  it("asks no one for the methodology when there are no notes at all (nothing to send a model)", async () => {
+    const t = deps([]);
+    const result = await runSectionPipeline(t.deps, { organizationId: ORG }, { ...input, notes: "  " });
+    expect(result.outcome).toBe("insufficient_input");
+    expect(t.loadMethodology).not.toHaveBeenCalled();
+  });
+
+  it("gives the categories to the filter pass as a labelled line outside the notes, and to no other pass", async () => {
+    const t = deps([json(filterOk), json(extractOk), json(generateOk)], { loadMethodology: withCategories(["SYNTHETIC CATEGORY ONE", "SYNTHETIC CATEGORY TWO"]) });
+    await runSectionPipeline(t.deps, { organizationId: ORG }, input);
+    const [filter, extract, generate] = t.model.requests;
+
+    expect(filter.prompt).toContain("Sensitive categories: SYNTHETIC CATEGORY ONE, SYNTHETIC CATEGORY TWO");
+    expect(filter.prompt.indexOf("Sensitive categories:")).toBeLessThan(filter.prompt.indexOf("<<<NOTES>>>"));
+    for (const request of [extract, generate]) {
+      expect(request.system + request.prompt).not.toContain("SYNTHETIC CATEGORY");
+      expect(request.system + request.prompt).not.toContain("Sensitive categories");
+    }
+  });
+
+  it("sends the filter exactly what it got before the list existed when the methodology has none", async () => {
+    const t = deps([json(filterOk), json(extractOk), json(generateOk)]);
+    await runSectionPipeline(t.deps, { organizationId: ORG }, input);
+    expect(t.model.requests[0].prompt).toBe(["Candidate templates: synthetic-template", "Named section: synthetic_section", "<<<NOTES>>>", input.notes, "<<<END NOTES>>>"].join("\n"));
+  });
+
+  it("with several candidate templates loads all of them first, and merges their categories without repeats", async () => {
+    const OTHER = { id: "44444444-4444-4444-8444-444444444444", slug: "other-template" };
+    const lists: Record<string, string[]> = { [TEMPLATE.id]: ["Alpha", "Beta"], [OTHER.id]: ["beta", "Gamma"] };
+    const loaded: string[] = [];
+    const t = deps([json(filterOk), json(extractOk), json(generateOk)], {
+      loadMethodology: async (id) => {
+        loaded.push(id);
+        return { promptId: PROMPT_ID, versionNumber: 1, methodology: parseMethodologyContent({ role: "R", sensitive_categories: lists[id] })! };
+      },
+    });
+    await runSectionPipeline(t.deps, { organizationId: ORG }, { ...input, templates: [TEMPLATE, OTHER] });
+    expect(loaded).toEqual([TEMPLATE.id, OTHER.id]);
+    expect(t.model.requests[0].prompt).toContain("Sensitive categories: Alpha, Beta, Gamma");
+  });
+});
+
+describe("mergeSensitiveCategories", () => {
+  it("keeps first-seen order, drops case-insensitive repeats, and stays bounded", () => {
+    const m = (cats: string[]) => parseMethodologyContent({ role: "R", sensitive_categories: cats })!;
+    expect(mergeSensitiveCategories([m(["A", "B"]), m(["b", "C"]), parseMethodologyContent({ role: "R" })!])).toEqual(["A", "B", "C"]);
+    const many = Array.from({ length: 10 }, (_, i) => m(Array.from({ length: 20 }, (_, j) => `cat-${i}-${j}`)));
+    expect(mergeSensitiveCategories(many)).toHaveLength(50);
   });
 });
