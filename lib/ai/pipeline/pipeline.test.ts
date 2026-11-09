@@ -462,3 +462,126 @@ describe("onProceed: the caller's hook between filter and extract", () => {
     expect(await failure(runSectionPipeline(t.deps, { organizationId: ORG }, input))).toBe(refusal);
   });
 });
+
+describe("proceedIfInsufficient: the person accepted thin notes", () => {
+  const thin = { ...filterOk, sufficient: false, missing_fields: ["test_scores", "quotes"] };
+  const APPROVED =
+    "Write only what the extracted fields support. Where the section needs something they do not contain, write [Please provide] in that place instead of inventing it. Include insufficient_input in flags.";
+  const BLANKING = 'set "flags" to ["insufficient_input"] and "content" to "[Please provide]"';
+  const run = (t: ReturnType<typeof deps>, extra: Parameters<typeof runSectionPipeline>[3] = { proceedIfInsufficient: true }) => runSectionPipeline(t.deps, { organizationId: ORG }, input, extra);
+
+  it("still stops on thin notes when the option is absent or false (the default)", async () => {
+    for (const extra of [undefined, { proceedIfInsufficient: false }]) {
+      const onProceed = vi.fn(async () => {});
+      const t = deps([json(thin)], { onProceed });
+      const result = await runSectionPipeline(t.deps, { organizationId: ORG }, input, extra);
+      expect(result.outcome).toBe("insufficient_input");
+      expect(result.section.content).toBe(PLEASE_PROVIDE);
+      expect(t.model.requests).toHaveLength(1);
+      expect(onProceed).not.toHaveBeenCalled();
+    }
+  });
+
+  it("goes on past a thin filter result: hook once, then extract and generate, with the approved sentence", async () => {
+    const onProceed = vi.fn(async () => {});
+    const t = deps([json(thin), json(extractOk), json({ content: "SYNTHETIC PARTIAL TEXT [Please provide] SYNTHETIC REST", flags: [] })], { onProceed });
+    const result = await run(t);
+
+    expect(onProceed).toHaveBeenCalledTimes(1);
+    expect(t.model.requests).toHaveLength(3);
+    const generate = t.model.requests[2];
+    expect(generate.system).toContain(APPROVED);
+    expect(generate.system).not.toContain(BLANKING);
+    expect(result.outcome).toBe("generated");
+    expect(result.methodologyPromptId).toBe(PROMPT_ID);
+    expect(result.passes.map((p) => p.pass)).toEqual(["filter", "extract", "generate"]);
+  });
+
+  it("keeps the model's text, forces insufficient_input when the filter said thin, and reports the closed missing list", async () => {
+    const t = deps([json({ ...thin, sensitive_content_detected: true }), json(extractOk), json({ content: "SYNTHETIC PARTIAL TEXT", flags: ["low_confidence_interpretation"] })]);
+    const result = await run(t);
+    expect(result.section.content).toBe("SYNTHETIC PARTIAL TEXT");
+    expect(result.section.flags).toEqual(["insufficient_input", "sensitive_content_detected", "low_confidence_interpretation"]);
+    expect(result.missingFields).toEqual(["test_scores", "quotes"]);
+  });
+
+  it("keeps the text and the flag when the model sets insufficient_input itself (it is not replaced, unlike a normal run)", async () => {
+    const t = deps([json(thin), json(extractOk), json({ content: "SYNTHETIC PARTIAL TEXT", flags: ["insufficient_input"] })]);
+    const result = await run(t);
+    expect(result.outcome).toBe("generated");
+    expect(result.section).toEqual({ key: "synthetic_section", content: "SYNTHETIC PARTIAL TEXT", flags: ["insufficient_input"] });
+  });
+
+  it("confirmed but the filter says sufficient this time: still the confirmed sentence, a normal result, no forced flag", async () => {
+    const onProceed = vi.fn(async () => {});
+    const t = deps([json(filterOk), json(extractOk), json({ content: "SYNTHETIC FULL TEXT", flags: [] })], { onProceed });
+    const result = await run(t);
+
+    const generate = t.model.requests[2];
+    expect(generate.system).toContain(APPROVED);
+    expect(generate.system).not.toContain(BLANKING);
+    expect(onProceed).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("generated");
+    expect(result.section).toEqual({ key: "synthetic_section", content: "SYNTHETIC FULL TEXT", flags: [] });
+    expect(result.missingFields).toEqual([]);
+  });
+
+  it("confirmed, filter sufficient, and the model flags insufficient_input itself: the flag stays and the text is not blanked", async () => {
+    const t = deps([json(filterOk), json(extractOk), json({ content: "SYNTHETIC TEXT WITH [Please provide] GAP", flags: ["insufficient_input"] })]);
+    const result = await run(t);
+    expect(result.outcome).toBe("generated");
+    expect(result.section.content).toBe("SYNTHETIC TEXT WITH [Please provide] GAP");
+    expect(result.section.flags).toEqual(["insufficient_input"]);
+  });
+
+  it("never stores blank text: a blank answer (allowed only with the model's own flag) becomes [Please provide]", async () => {
+    const t = deps([json(thin), json(extractOk), json({ content: "   ", flags: ["insufficient_input"] })]);
+    const result = await run(t);
+    expect(result.section.content).toBe(PLEASE_PROVIDE);
+    expect(result.section.flags).toEqual(["insufficient_input"]);
+  });
+
+  it("holds the text it keeps to the rules for saved text: control characters mean a retry, then invalid_output", async () => {
+    const dirty = json({ content: "SYNTHETIC\u0000TEXT", flags: ["insufficient_input"] });
+    const retried = deps([json(thin), json(extractOk), dirty, json({ content: "SYNTHETIC CLEAN TEXT", flags: [] })]);
+    expect((await run(retried)).section.content).toBe("SYNTHETIC CLEAN TEXT");
+    expect(retried.model.requests).toHaveLength(4);
+
+    const failed = deps([json(thin), json(extractOk), dirty, dirty]);
+    expect(await failure(run(failed))).toMatchObject({ code: "invalid_output", pass: "generate" });
+  });
+
+  it("in a normal run that same dirty answer is still just replaced, as before", async () => {
+    const t = deps([json(filterOk), json(extractOk), json({ content: "SYNTHETIC\u0000TEXT", flags: ["insufficient_input"] })]);
+    const result = await runSectionPipeline(t.deps, { organizationId: ORG }, input);
+    expect(result.section.content).toBe(PLEASE_PROVIDE);
+  });
+
+  it("changes nothing about the filter and extract prompts", async () => {
+    const normal = deps([json(filterOk), json(extractOk), json(generateOk)]);
+    await runSectionPipeline(normal.deps, { organizationId: ORG }, input);
+    const confirmed = deps([json(filterOk), json(extractOk), json(generateOk)]);
+    await run(confirmed);
+    expect(confirmed.model.requests[0]).toEqual(normal.model.requests[0]);
+    expect(confirmed.model.requests[1]).toEqual(normal.model.requests[1]);
+  });
+
+  it("still asks no model about empty notes, and calls no hook", async () => {
+    const onProceed = vi.fn(async () => {});
+    const t = deps([], { onProceed });
+    const result = await runSectionPipeline(t.deps, { organizationId: ORG }, { ...input, notes: "" }, { proceedIfInsufficient: true });
+    expect(result.section.content).toBe(PLEASE_PROVIDE);
+    expect(t.model.requests).toHaveLength(0);
+    expect(onProceed).not.toHaveBeenCalled();
+  });
+
+  it("still fails before any model call on an unusable methodology", async () => {
+    const t = deps([json(thin)], {
+      loadMethodology: async () => {
+        throw new PipelineError("methodology_unavailable");
+      },
+    });
+    expect((await failure(run(t))).code).toBe("methodology_unavailable");
+    expect(t.model.requests).toHaveLength(0);
+  });
+});

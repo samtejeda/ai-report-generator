@@ -62,6 +62,11 @@ export const generateAnswerSchema = z
   });
 export type GenerateAnswer = z.infer<typeof generateAnswerSchema>;
 
+/** Whether model text may become a section's content: the same rules as text a person may save. */
+export function isUsableSectionText(text: string): boolean {
+  return generatedTextSchema.safeParse(text).success;
+}
+
 /** The per-section result the pipeline hands back: `{content, flags}`. */
 export type SectionResult = { content: string; flags: SectionFlag[] };
 

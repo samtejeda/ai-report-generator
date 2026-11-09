@@ -141,6 +141,28 @@ describe("runPipeline: onProceed", () => {
   });
 });
 
+describe("runPipeline: proceedIfInsufficient", () => {
+  const thin = JSON.stringify({ ...answers[0], sufficient: false, missing_fields: ["quotes"] });
+
+  it("goes on past thin notes through the real transport, with the approved sentence in the system message", async () => {
+    const { calls, transport } = scriptedFetch([thin, JSON.stringify(answers[1]), JSON.stringify({ content: "SYNTHETIC PARTIAL TEXT", flags: [] })]);
+    const result = await runPipeline(ORG, input, { fetch: transport, loadMethodology, proceedIfInsufficient: true });
+    expect(calls).toHaveLength(3);
+    expect(calls[2].body.messages[0].content).toContain("Write only what the extracted fields support.");
+    expect(calls[2].body.messages[0].content).not.toContain("Never invent details.");
+    expect(result.section).toEqual({ key: "synthetic_section", content: "SYNTHETIC PARTIAL TEXT", flags: ["insufficient_input"] });
+  });
+
+  it("stops after the filter without the option, and with the option set false", async () => {
+    for (const proceedIfInsufficient of [undefined, false]) {
+      const { calls, transport } = scriptedFetch([thin]);
+      const result = await runPipeline(ORG, input, { fetch: transport, loadMethodology, proceedIfInsufficient });
+      expect(result.outcome).toBe("insufficient_input");
+      expect(calls).toHaveLength(1);
+    }
+  });
+});
+
 describe("runPipeline: refusals and failures, with no fallback", () => {
   it("refuses in stub mode (from the environment or the option) before any request or database read", async () => {
     const { calls, transport } = scriptedFetch([]);

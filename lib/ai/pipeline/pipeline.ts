@@ -10,6 +10,7 @@ import {
   extractAnswerSchema,
   filterAnswerSchema,
   generateAnswerSchema,
+  isUsableSectionText,
   orderFlags,
   type ExtractField,
   type SectionFlag,
@@ -27,7 +28,9 @@ import {
  * `sensitive_categories` list goes to the filter pass and nowhere else.
  *
  * Not enough input is a normal result, not an error: the section comes back as `[Please provide]`
- * with an `insufficient_input` flag, and the later passes do not run.
+ * with an `insufficient_input` flag, and the later passes do not run. The one exception is
+ * `proceedIfInsufficient` (the person accepted thin notes): then the run goes on and writes what the
+ * notes support, with `[Please provide]` in place where they do not.
  *
  * Everything outside the model is injected (`PipelineDeps`), so the whole thing runs in tests on
  * scripted answers. The real wiring, with the database and the endpoint, is `runPipeline` in
@@ -69,7 +72,18 @@ export type PipelineDeps = {
   now?: () => number;
 };
 
-export type PipelineOptions = { budgetMs?: number; callTimeoutMs?: number };
+export type PipelineOptions = {
+  budgetMs?: number;
+  callTimeoutMs?: number;
+  /**
+   * The person has accepted thin notes: a filter result of `sufficient: false` no longer stops the
+   * run. The run goes on (hook, extract, generate) and generate uses the confirmed rule in every
+   * such run, even when the filter says sufficient this time. The model's text is kept (a blank
+   * answer becomes `[Please provide]`), `insufficient_input` is added when the filter said thin
+   * (and stays if the model set it itself), and the outcome is `generated`.
+   */
+  proceedIfInsufficient?: boolean;
+};
 
 export type PipelineResult = {
   outcome: "generated" | "insufficient_input";
@@ -139,7 +153,10 @@ export async function runSectionPipeline(
   if (!template || !loaded) throw new PipelineError("internal", "filter");
   const sensitive = filtered.data.sensitive_content_detected;
 
-  if (!filtered.data.sufficient) {
+  const thin = !filtered.data.sufficient;
+  const confirmed = options.proceedIfInsufficient === true;
+
+  if (thin && !confirmed) {
     return {
       outcome: "insufficient_input",
       section: { key: sectionKey, content: PLEASE_PROVIDE, flags: orderFlags(["insufficient_input", ...(sensitive ? (["sensitive_content_detected"] as const) : [])]) },
@@ -150,7 +167,7 @@ export async function runSectionPipeline(
     };
   }
 
-  // The filter said go: the caller's hook runs now, before any more model work. Its failure is not ours to reword.
+  // The filter said go (or the person confirmed): the caller's hook runs now, before any more model work. Its failure is not ours to reword.
   await deps.onProceed?.();
 
   // 2. extract
@@ -176,7 +193,9 @@ export async function runSectionPipeline(
   const generated = await runPass({
     pass: "generate",
     schema: generateAnswerSchema,
-    prompt: buildGeneratePrompt({ methodology: loaded.methodology, section, extracted: extracted.data, context }),
+    prompt: buildGeneratePrompt({ methodology: loaded.methodology, section, extracted: extracted.data, context, confirmed }),
+    // Text we are going to keep must pass the same rules as text a person may save (a normal run drops it instead).
+    check: confirmed ? (a) => a.content.trim() === "" || isUsableSectionText(a.content) : undefined,
     callModel: deps.callModel,
     callTimeoutMs,
     budget,
@@ -185,6 +204,23 @@ export async function runSectionPipeline(
 
   const flags = new Set<SectionFlag>(generated.data.flags);
   if (sensitive) flags.add("sensitive_content_detected");
+
+  if (confirmed) {
+    // The person accepted thin notes: keep what was written. The flag is forced only when the filter
+    // said thin; if the model set it itself it stays. Blank text (only possible with that flag) is
+    // never stored as blank.
+    if (thin) flags.add("insufficient_input");
+    const text = generated.data.content.trim();
+    return {
+      outcome: "generated",
+      section: { key: sectionKey, content: text === "" ? PLEASE_PROVIDE : text, flags: orderFlags(flags) },
+      template,
+      methodologyPromptId: loaded.promptId,
+      missingFields: thin ? filtered.data.missing_fields : [],
+      passes,
+    };
+  }
+
   const insufficient = flags.has("insufficient_input");
   return {
     outcome: insufficient ? "insufficient_input" : "generated",

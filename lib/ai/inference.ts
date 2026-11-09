@@ -178,6 +178,12 @@ export type PipelineRunOptions = {
    * called when the filter stops the run, when a pass fails first, or for empty notes.
    */
   onProceed?: () => Promise<void>;
+  /**
+   * The person accepted thin notes: a thin filter result no longer stops the run, and generate uses
+   * the confirmed rule (keeps the model's text, `[Please provide]` where the notes do not support
+   * it, `insufficient_input` flagged). See PipelineOptions.proceedIfInsufficient.
+   */
+  proceedIfInsufficient?: boolean;
   /** Test seams. Production leaves both unset: the methodology comes from the database, and nothing is retrieved yet. */
   loadMethodology?: (templateId: string) => Promise<LoadedMethodology>;
   retrieveContext?: ContextProvider;
@@ -231,6 +237,10 @@ export async function runPipeline(ctx: TenantContext, input: PipelineInput, opti
     },
     ctx,
     input,
-    { budgetMs: options.budgetMs ?? PIPELINE_BUDGET_MS, callTimeoutMs: options.callTimeoutMs ?? PIPELINE_CALL_TIMEOUT_MS },
+    {
+      budgetMs: options.budgetMs ?? PIPELINE_BUDGET_MS,
+      callTimeoutMs: options.callTimeoutMs ?? PIPELINE_CALL_TIMEOUT_MS,
+      proceedIfInsufficient: options.proceedIfInsufficient === true,
+    },
   );
 }
