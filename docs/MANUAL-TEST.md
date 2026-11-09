@@ -8,16 +8,22 @@ Mark each step Pass, Fail or Skip in the results table at the end. For a Fail, w
 
 ## What can and cannot be tested today
 
-| Part | Needs | Status 2026-10-28 |
+| Part | Needs | Status 2026-11-09 |
 |---|---|---|
-| A. Owner: sign-in, account, clients, reports, admin screens | The owner account (exists on `dev`, MFA on) | **Can run now** |
-| D. Edge cases and abuse | Same | **Can run now** |
-| C1. Generate with no endpoint set; an endpoint the server must refuse | Same | **Can run now** |
-| C2. Generate that succeeds, then edit and Finalize | Tailscale on this machine, `tailscale serve` in front of Ollama, the endpoint set on the practice | **Blocked: Tailscale is not installed here.** A report only becomes `generated` when generation succeeds, so Finalize cannot be reached without it |
-| B. Associate and admin roles in the screens | An associate and an admin user | **Blocked: nothing in the app or its scripts can create them.** `scripts/bootstrap-owner.mjs` makes a practice and its owner only; invitations are not built (`PROGRESS.md`, Next up item 1) |
+| A. Owner: sign-in, account, clients, reports, admin screens | The owner account (exists on `dev`, MFA on) | **Done 2026-10-28 to 2026-11-06** (results file). Left over: A1.6 (ticked trusted-device box), A3.4 and A4.5 (server limits, go to the Postman pass) |
+| D. Edge cases and abuse | Same | D3 to D7 done. **D1 and D2 not run** (D1 can run now; D2 is a 2-hour wait). **D8 blocked** (Tailscale) |
+| C1. Generate with no endpoint set; an endpoint the server must refuse | Same | **Done** |
+| C2. Generate that succeeds, then edit and Finalize | Tailscale on this machine, `tailscale serve` in front of Ollama, the endpoint set on the practice | **Blocked: Tailscale is not installed here.** A report only becomes `generated` when generation succeeds, so Finalize (and the Finalize-with-unsaved-text check, #87) cannot be reached without it |
+| B. Associate roles | An associate user | **Can run now, by hand:** invitations are merged (#84) and `0015` and `0016` are on `dev`; use the "Invite an associate by hand" steps. The invitation screens are merged (#90); use the screen steps in B (G below is the longer checklist for them) |
+| B. Admin steps (B9 to B12) | An admin user | **Not run, on purpose.** Sam's decision (2026-11-09): only the owner and associate roles are in use; the admin role may not be needed. The steps stay in this file in case it comes back |
+| F. Word export, by address (no button yet) | A report with some saved text | **Can run now** (#85 is merged); the draft case only, since a finalized report needs C2 |
+| G. Invitation screens | Merged (#90, 2026-11-09) | **Can run now.** The builder's short click-through is in B ("Invite an associate by the screens"); G is the fuller list |
+| H. Export button | The `feat/export-button` pull request merged | **Not built yet** (starts after G) |
 | E. A second practice cannot see the first | A second practice made by `bootstrap-owner.mjs` on `dev` | Optional; a database write on the shared `dev` database, so only with Sam's go-ahead (dry run first, host checked) |
 
 Roles are still covered in CI at the route level (`authz.integration.test.ts`, 31 tests, and the admin and client suites), so part B is about the screens, not about whether access control holds.
+
+**Everything not yet run, in one place (2026-11-09).** Browser: A1.6, D1, D2, C2.1 to C2.7, D8, Finalize with unsaved text (needs a `generated` report), the refused-save screen with two tabs (optional; the feature may be removed, decisions row 15), B1 to B8 and B13 to B17 (admin steps B9 to B12 skipped), E1 to E3, F1 to F10, G (can run now), H (after it merges). Server-side checks the browser cannot reach are in [POSTMAN-PASS.md](POSTMAN-PASS.md), none run yet.
 
 ## 0. Setup
 
@@ -119,9 +125,9 @@ When Tailscale is installed and `tailscale serve` exposes Ollama as an `https://
 | D7 | Look at your own row on `/admin/users` | No buttons at all (you cannot change, deactivate or reset yourself) |
 | D8 | Start four Generate requests across two reports quickly (with a working endpoint) | At most 2 run at once; the rest get the "try again in N seconds" message |
 
-## B. Associate and admin (blocked until they can be created)
+## B. Associate and admin
 
-An associate can now be created by invitation, from the owner screen `/admin/invitations` and the public `/accept-invitation` page (see the screen steps below; the console steps after them still work). An **admin cannot**: admin invitations are undecided, so part B's admin steps (B9 to B12) stay blocked. Sign in as each person in a separate browser profile.
+An associate can now be created by invitation, from the owner screen `/admin/invitations` and the public `/accept-invitation` page (see the screen steps below; the console steps after them still work). The admin role is not in use (Sam, 2026-11-09: only owner and associate), so skip B9 to B12 and the "to admin" half of B13. Sign in as each person in a separate browser profile.
 
 **Invite an associate by the screens** (needs the migrations `0015` and `0016` applied to `dev`; synthetic address only; nothing is sent by email, the link is printed in the dev server terminal):
 
@@ -172,6 +178,60 @@ Create a second practice with `scripts/bootstrap-owner.mjs` (dry run first, chec
 | E2 | Paste a client or report address from practice 1 | The 404 page |
 | E3 | Call `/api/clients/<practice 1 id>` and `/api/reports/<practice 1 id>` | 404, identical to a missing id |
 
+## F. Word export, by address (can run now; the button comes later, see H)
+
+The route is merged (#85) but no screen calls it yet. Open a report page, copy its id from the address (`/reports/<id>`), then open `/api/reports/<id>/export?format=docx` in the address bar while signed in. Use a **draft** report with saved text in at least two sections and one section left empty. Open the file in Word or Pages. (A finalized report needs C2, so F10 waits.)
+
+| # | Do | Expect |
+|---|---|---|
+| F1 | Open the export address for the draft report | The browser saves `report-<id>.docx`; nothing about the client is in the file name |
+| F2 | Open the file | First line says `DRAFT, not finalized`, and every page header says it too |
+| F3 | Read the body | Each section's title, in order, with its **current** saved text; the empty section shows `[Not yet written]` |
+| F4 | Look for names | No client name, practice name, email or author anywhere in the text or in File > Properties; anything found is a finding |
+| F5 | Edit a section and save, then export again | The new text is in the file |
+| F6 | Type in a section and **do not save**, then export | The unsaved text is **not** in the file (this is why the button will warn first, H3) |
+| F7 | Save a section containing `<b>bold</b> & "quotes"` and a line break, then export | The characters appear literally, nothing is bold, nothing breaks |
+| F8 | Change the address to `format=pdf`, then remove `format`, then add `&x=1` | Each shows a JSON error (validation failed), no file |
+| F9 | Open the export address while signed out | Sent to `/login`; no file |
+| F10 | Export a **finalized** report | No `DRAFT` line, no header (blocked until C2) |
+| F11 | As an admin (even with a grant on that client): open the export address | Refused (403); the owner's audit shows `authz.denied`. **Skipped: the admin role is not in use** |
+| F12 | As an associate not assigned to that client | The same 404 as a made-up report (needs B) |
+
+The 21st export in 10 minutes is a 429 (limit 20 per person); that is in [POSTMAN-PASS.md](POSTMAN-PASS.md) because it takes a script.
+
+## G. Invitation screens (merged in #90, 2026-11-09)
+
+The builder's short click-through is in part B, "Invite an associate by the screens". This is the fuller checklist for the same screens, from the request:
+
+| # | Do | Expect |
+|---|---|---|
+| G1 | Owner opens the invitations screen | "Invite an associate" (email only) and a list with a status for each invitation (pending, accepted, expired, revoked) |
+| G2 | Associate and admin try the same address | The 404 page |
+| G3 | Invite a new address, then invite your own owner address | The same success message both times; the second prints no mail line in the dev terminal |
+| G4 | Copy the link from the dev terminal, open it in another browser profile | The page asks for a name and a password twice (show/hide works); the token is gone from the address bar |
+| G5 | Open the same link again after accepting, and a link with a letter changed | One and the same generic error each time |
+| G6 | Short password, passwords that do not match | Plain refusals; nothing is created |
+| G7 | After accepting: sign in as the new person | Sent to authenticator setup; after it, no clients (B1) |
+| G8 | Owner assigns one client to them (B4) | They see it on their next click |
+| G9 | Resend an invitation, then try the old link | The old link fails; the new one works |
+| G10 | Revoke a pending invitation, then try its link | The link fails; the list says revoked |
+| G11 | Wait over 5 minutes after signing in, then invite | A "sign in again" message, not a raw error |
+| G12 | Use the page at 375 px wide and with the keyboard only | Everything reachable; nothing cut off |
+| G13 | After accepting, press Back | The token and password are not shown again |
+
+Sending real mail is not built (Resend, decisions row 8): the link only appears in the dev terminal until it is.
+
+## H. Export button (not built yet; fill in when `feat/export-button` merges)
+
+| # | Do | Expect |
+|---|---|---|
+| H1 | Open a report as the owner and as an assigned associate | The "Download Word file" button is there |
+| H2 | Open a report as an admin | No button. **Skipped: the admin role is not in use** |
+| H3 | Type in a section, do not save, press the button | A red list names the unsaved sections and says their text will not be in the file; "Go back and save" is the default (Esc and the focused button); "Download anyway" is the second choice and does download |
+| H4 | Read near the button | A plain sentence that a report not finalized downloads with a "DRAFT, not finalized" line |
+| H5 | Press the button 21 times in 10 minutes | A short wait message, no raw error |
+| H6 | Use the button at 375 px and with the keyboard only | Reachable and readable |
+
 ## Results
 
 First run (owner only, 2026-10-28 to 2026-10-30): see [MANUAL-TEST-RESULTS-2026-10-28.md](MANUAL-TEST-RESULTS-2026-10-28.md). The table below is for the next run; fill it in then.
@@ -188,5 +248,8 @@ First run (owner only, 2026-10-28 to 2026-10-30): see [MANUAL-TEST-RESULTS-2026-
 | D1 to D8 | | |
 | B1 to B17 | | |
 | E1 to E3 | | |
+| F1 to F12 | | |
+| G1 to G13 | | |
+| H1 to H6 | | |
 
 After the run, hand this table to the supervising session. It reads the audit log from the database (read-only) and checks that each action above left the expected `client.*`, `report.*`, `auth.*` and `authz.denied` rows, and none of them contains client text.
