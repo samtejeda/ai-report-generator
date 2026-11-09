@@ -37,7 +37,7 @@ function fakeModel(script: Step[]) {
 
 function deps(script: Step[], over: Partial<PipelineDeps> = {}) {
   const model = fakeModel(script);
-  const loadMethodology = vi.fn(async () => ({ promptId: PROMPT_ID, versionNumber: 2, methodology: parseMethodologyContent({ role: "SYNTHETIC ROLE TEXT" })! }));
+  const loadMethodology = vi.fn<PipelineDeps["loadMethodology"]>(async () => ({ promptId: PROMPT_ID, versionNumber: 2, methodology: parseMethodologyContent({ role: "SYNTHETIC ROLE TEXT" })! }));
   return { model, loadMethodology, deps: { callModel: model.callModel, loadMethodology, ...over } satisfies PipelineDeps };
 }
 

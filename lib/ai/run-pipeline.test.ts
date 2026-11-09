@@ -163,6 +163,70 @@ describe("runPipeline: proceedIfInsufficient", () => {
   });
 });
 
+describe("runPipeline: methodologyPromptId (the report's pinned version)", () => {
+  const PINNED = "55555555-5555-4555-8555-555555555555";
+
+  it("hands the pinned id to the loader with the template, and reports the version it used", async () => {
+    const { transport } = scriptedFetch(answers.map((a) => JSON.stringify(a)));
+    const seen: [string, string | undefined][] = [];
+    const result = await runPipeline(ORG, input, {
+      fetch: transport,
+      methodologyPromptId: PINNED,
+      loadMethodology: async (templateId, pinned) => {
+        seen.push([templateId, pinned]);
+        return { promptId: pinned ?? "none", versionNumber: 1, methodology: parseMethodologyContent({ role: "SYNTHETIC ROLE TEXT" })! };
+      },
+    });
+    expect(seen).toEqual([[TEMPLATE.id, PINNED]]);
+    expect(result.methodologyPromptId).toBe(PINNED);
+  });
+
+  it("passes no pinned id when the option is absent (the active version is read)", async () => {
+    const { transport } = scriptedFetch(answers.map((a) => JSON.stringify(a)));
+    const seen: (string | undefined)[] = [];
+    await runPipeline(ORG, input, {
+      fetch: transport,
+      loadMethodology: async (_t, pinned) => {
+        seen.push(pinned);
+        return loadMethodology();
+      },
+    });
+    expect(seen).toEqual([undefined]);
+  });
+
+  it("needs exactly one template, and says so before any model call or read", async () => {
+    const { calls, transport } = scriptedFetch([]);
+    const load = vi.fn(loadMethodology);
+    const other = { id: "44444444-4444-4444-8444-444444444444", slug: "other-template" };
+    for (const templates of [[TEMPLATE, other], []]) {
+      await expect(
+        runPipeline(ORG, { ...input, templates }, { fetch: transport, methodologyPromptId: PINNED, loadMethodology: load }),
+      ).rejects.toMatchObject({ name: "PipelineError", code: "invalid_input" });
+    }
+    expect(calls).toHaveLength(0);
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it("a refusal from the loader is a methodology_unavailable with no model call", async () => {
+    const { calls, transport } = scriptedFetch([]);
+    const error = await runPipeline(ORG, input, {
+      fetch: transport,
+      methodologyPromptId: PINNED,
+      loadMethodology: async () => {
+        const { PipelineError } = await import("./errors");
+        throw new PipelineError("methodology_unavailable");
+      },
+    }).catch((e) => e);
+    expect(error).toMatchObject({ code: "methodology_unavailable" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("stub mode still refuses before looking at the pinned id", async () => {
+    const { transport } = scriptedFetch([]);
+    await expect(runPipeline(ORG, input, { mode: "stub", fetch: transport, methodologyPromptId: PINNED, loadMethodology })).rejects.toMatchObject({ code: "invalid_config" });
+  });
+});
+
 describe("runPipeline: refusals and failures, with no fallback", () => {
   it("refuses in stub mode (from the environment or the option) before any request or database read", async () => {
     const { calls, transport } = scriptedFetch([]);

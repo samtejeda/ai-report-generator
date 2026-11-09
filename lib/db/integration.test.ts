@@ -3,7 +3,7 @@ import { eq, getTableName, sql } from "drizzle-orm";
 import { Pool } from "@neondatabase/serverless";
 import { drizzle, type NeonDatabase } from "drizzle-orm/neon-serverless";
 import * as schema from "./schema";
-import { loadActivePrompt } from "@/lib/ai/prompt-loader";
+import { loadActivePrompt, loadPromptById } from "@/lib/ai/prompt-loader";
 import { TENANT_TABLES, tenantDb } from "./tenant";
 
 // Integration tests against a scratch Neon branch (D7: the `test` branch of the dev
@@ -1029,6 +1029,50 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
     it("refuses an unknown or malformed template id", async () => {
       await refused(loadActivePrompt({ organizationId: A.orgId }, "99999999-9999-4999-8999-999999999999", app));
       await refused(loadActivePrompt({ organizationId: A.orgId }, "not-a-uuid", app));
+    });
+
+    it("loadPromptById reads the pinned version even when it is no longer the active one", async () => {
+      const t = await seedTemplate(tA, A.userId, "loader-pinned", okContent);
+      const [v2] = await tA.insert(schema.methodologyPrompts, { templateId: t.templateId, versionNumber: 2, content: { role: "SYNTHETIC ROLE TEXT V2" }, notes: "synthetic v2", createdByUserId: A.userId });
+      await tA.update(schema.reportTemplates, t.templateId, { activeMethodologyPromptId: v2.id });
+
+      const pinned = await loadPromptById({ organizationId: A.orgId }, t.templateId, t.promptId!, app);
+      expect(pinned).toEqual({ promptId: t.promptId, versionNumber: 1, methodology: okContent });
+      expect((await loadActivePrompt({ organizationId: A.orgId }, t.templateId, app)).promptId).toBe(v2.id);
+    });
+
+    it("loadPromptById loads categories that live in the database with the methodology", async () => {
+      const t = await seedTemplate(tA, A.userId, "loader-categories", { ...okContent, sensitive_categories: ["SYNTHETIC CATEGORY ONE", "SYNTHETIC CATEGORY TWO"] });
+      const loaded = await loadPromptById({ organizationId: A.orgId }, t.templateId, t.promptId!, app);
+      expect(loaded.methodology.sensitive_categories).toEqual(["SYNTHETIC CATEGORY ONE", "SYNTHETIC CATEGORY TWO"]);
+    });
+
+    it("loadPromptById refuses a prompt that belongs to another template, even in the same practice", async () => {
+      const one = await seedTemplate(tA, A.userId, "loader-one", okContent);
+      const two = await seedTemplate(tA, A.userId, "loader-two", okContent);
+      await refused(loadPromptById({ organizationId: A.orgId }, one.templateId, two.promptId!, app));
+      await refused(loadPromptById({ organizationId: A.orgId }, two.templateId, one.promptId!, app));
+    });
+
+    it("loadPromptById refuses another practice's prompt or template, the same as a missing one", async () => {
+      const a = await seedTemplate(tA, A.userId, "loader-pin-a", okContent);
+      const b = await seedTemplate(tB, B.userId, "loader-pin-b", okContent);
+      await refused(loadPromptById({ organizationId: A.orgId }, a.templateId, b.promptId!, app)); // B's prompt id, A's template
+      await refused(loadPromptById({ organizationId: A.orgId }, b.templateId, b.promptId!, app)); // B's template and prompt, A's session
+      await refused(loadPromptById({ organizationId: B.orgId }, b.templateId, a.promptId!, app)); // and the other way round
+      expect((await loadPromptById({ organizationId: B.orgId }, b.templateId, b.promptId!, app)).promptId).toBe(b.promptId);
+    });
+
+    it("loadPromptById refuses an unknown id, a placeholder, unparseable content and a deleted template", async () => {
+      await refused(loadPromptById({ organizationId: A.orgId }, A.templateId, "99999999-9999-4999-8999-999999999999", app));
+      const placeholder = await seedTemplate(tA, A.userId, "loader-pin-placeholder", { placeholder: true });
+      const odd = await seedTemplate(tA, A.userId, "loader-pin-odd", { note: "not a methodology section" });
+      await refused(loadPromptById({ organizationId: A.orgId }, placeholder.templateId, placeholder.promptId!, app));
+      await refused(loadPromptById({ organizationId: A.orgId }, odd.templateId, odd.promptId!, app));
+
+      const gone = await seedTemplate(tA, A.userId, "loader-pin-gone", okContent);
+      await tA.softDelete(schema.reportTemplates, gone.templateId);
+      await refused(loadPromptById({ organizationId: A.orgId }, gone.templateId, gone.promptId!, app));
     });
 
     it("reads only the caller's practice: another practice's template is the same refusal as a missing one", async () => {

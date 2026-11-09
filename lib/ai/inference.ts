@@ -4,11 +4,11 @@ import { getEnv } from "@/lib/env";
 import type { TenantContext } from "@/lib/db/tenant";
 import { InferenceError, PipelineError } from "./errors";
 import { resolveModel, type ModelOverrides, type ModelRole } from "./models";
-import { loadActivePrompt } from "./prompt-loader";
+import { loadActivePrompt, loadPromptById } from "./prompt-loader";
 import type { ContextProvider } from "./pipeline/context";
 import type { LoadedMethodology } from "./pipeline/methodology";
 import type { ModelCall } from "./pipeline/passes";
-import { PIPELINE_BUDGET_MS, PIPELINE_CALL_TIMEOUT_MS, runSectionPipeline, type PipelineInput, type PipelineResult } from "./pipeline/pipeline";
+import { PIPELINE_BUDGET_MS, PIPELINE_CALL_TIMEOUT_MS, pipelineInputSchema, runSectionPipeline, type PipelineInput, type PipelineResult } from "./pipeline/pipeline";
 
 /**
  * The single entry point for inference (CLAUDE.md, "LLM call architecture").
@@ -184,8 +184,14 @@ export type PipelineRunOptions = {
    * it, `insufficient_input` flagged). See PipelineOptions.proceedIfInsufficient.
    */
   proceedIfInsufficient?: boolean;
+  /**
+   * Use this exact methodology prompt version (the one the report pinned) instead of the template's
+   * active one. It is read through the tenant data layer and refused unless it belongs to the
+   * input's template in the caller's practice. Needs exactly one template in the input.
+   */
+  methodologyPromptId?: string;
   /** Test seams. Production leaves both unset: the methodology comes from the database, and nothing is retrieved yet. */
-  loadMethodology?: (templateId: string) => Promise<LoadedMethodology>;
+  loadMethodology?: (templateId: string, pinnedPromptId?: string) => Promise<LoadedMethodology>;
   retrieveContext?: ContextProvider;
 };
 
@@ -214,6 +220,13 @@ export async function runPipeline(ctx: TenantContext, input: PipelineInput, opti
     throw new PipelineError("invalid_config");
   }
 
+  // A pinned version belongs to one template, so the input must name exactly one.
+  const pinned = options.methodologyPromptId;
+  if (pinned !== undefined) {
+    const parsed = pipelineInputSchema.safeParse(input);
+    if (!parsed.success || parsed.data.templates.length !== 1) throw new PipelineError("invalid_input");
+  }
+
   const callModel: ModelCall = async (request) => {
     const model = resolveModel(request.role, options.models);
     const call = await callProvider({
@@ -231,7 +244,12 @@ export async function runPipeline(ctx: TenantContext, input: PipelineInput, opti
   return runSectionPipeline(
     {
       callModel,
-      loadMethodology: options.loadMethodology ?? ((templateId) => loadActivePrompt(ctx, templateId)),
+      loadMethodology: (templateId) =>
+        options.loadMethodology
+          ? options.loadMethodology(templateId, pinned)
+          : pinned !== undefined
+            ? loadPromptById(ctx, templateId, pinned)
+            : loadActivePrompt(ctx, templateId),
       retrieveContext: options.retrieveContext,
       onProceed: options.onProceed,
     },
