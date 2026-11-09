@@ -13,6 +13,7 @@ export const PUBLIC_PAGES: readonly { path: string; reason: string }[] = [
   { path: "/login", reason: "The sign-in form; it creates the session." },
   { path: "/forgot-password", reason: "Requests a reset link; same answer whether or not the address has an account." },
   { path: "/reset-password", reason: "The emailed single-use token is the credential." },
+  { path: "/accept-invitation", reason: "The emailed single-use invitation token is the credential; the page reads no tenant data and only the accept route ever looks the token up." },
 ];
 
 export const PUBLIC_API: readonly { path: string; prefix: boolean; reason: string }[] = [

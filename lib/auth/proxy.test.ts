@@ -9,17 +9,17 @@ const passes = (res: Response) => res.headers.get("x-middleware-next") === "1";
 
 describe("public surface", () => {
   it("lists the pages and endpoints that need no session, each with a reason", () => {
-    expect(PUBLIC_PAGES.map((p) => p.path)).toEqual(["/", "/login", "/forgot-password", "/reset-password"]);
+    expect(PUBLIC_PAGES.map((p) => p.path)).toEqual(["/", "/login", "/forgot-password", "/reset-password", "/accept-invitation"]);
     expect(PUBLIC_API.map((a) => a.path)).toEqual(["/api/health", "/api/invitations/accept", "/api/auth"]);
     for (const entry of [...PUBLIC_PAGES, ...PUBLIC_API]) expect(entry.reason.length, entry.path).toBeGreaterThan(20);
   });
 
-  it.each(["/", "/login", "/login/", "/forgot-password", "/reset-password", "/api/health", "/api/invitations/accept", "/api/auth", "/api/auth/sign-in/email"])("%s is public", (p) => {
+  it.each(["/", "/login", "/login/", "/forgot-password", "/reset-password", "/accept-invitation", "/api/health", "/api/invitations/accept", "/api/auth", "/api/auth/sign-in/email"])("%s is public", (p) => {
     expect(isPublicPath(p)).toBe(true);
   });
 
   it.each([
-    "/loginx", "/login/x", "/login/..", "/Login", "/api/authx", "/api/auth-x", "/api/health/x", "/api/healthz", "/api/invitations", "/api/invitations/accept/x", "/api/invitations/acceptx", "/api/admin/invitations",
+    "/loginx", "/login/x", "/login/..", "/Login", "/api/authx", "/api/auth-x", "/api/health/x", "/api/healthz", "/api/invitations", "/api/invitations/accept/x", "/api/invitations/acceptx", "/api/admin/invitations", "/accept-invitation/x", "/accept-invitationx", "/admin/invitations",
     "/clients", "/account", "/account/mfa", "/api/me", "/api/clients", "/api/clients/1", "//login", "/%6Cogin", "",
   ])("%s is not public", (p) => {
     expect(isPublicPath(p)).toBe(false);
@@ -46,7 +46,7 @@ describe("proxy (a convenience, never the gate)", () => {
   });
 
   it("lets public paths through without a cookie", () => {
-    for (const path of ["/", "/login", "/forgot-password", "/reset-password", "/api/health", "/api/auth/sign-in/email"]) {
+    for (const path of ["/", "/login", "/forgot-password", "/reset-password", "/accept-invitation", "/api/health", "/api/auth/sign-in/email"]) {
       expect(passes(proxy(req(path))), path).toBe(true);
     }
   });
