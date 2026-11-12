@@ -18,7 +18,7 @@ Mark each step Pass, Fail or Skip in the results table at the end. For a Fail, w
 | B. Admin steps (B9 to B12) | An admin user | **Not run, on purpose.** Sam's decision (2026-11-09): only the owner and associate roles are in use; the admin role may not be needed. The steps stay in this file in case it comes back |
 | F. Word export, by address (no button yet) | A report with some saved text | **Can run now** (#85 is merged); the draft case only, since a finalized report needs C2 |
 | G. Invitation screens | Merged (#90, 2026-11-09) | **Can run now.** The builder's short click-through is in B ("Invite an associate by the screens"); G is the fuller list |
-| H. Export button | The `feat/export-button` pull request merged | **Not built yet** (starts after G) |
+| H. Export button | Merged (#91, 2026-11-09) | **Can run now** (a report with some saved text; the draft case only until C2 works). Not yet clicked through in a browser; the builder's rows D9 to D12 and B18 cover the same ground in short form |
 | E. A second practice cannot see the first | A second practice made by `bootstrap-owner.mjs` on `dev` | Optional; a database write on the shared `dev` database, so only with Sam's go-ahead (dry run first, host checked) |
 
 Roles are still covered in CI at the route level (`authz.integration.test.ts`, 31 tests, and the admin and client suites), so part B is about the screens, not about whether access control holds.
@@ -226,7 +226,7 @@ The builder's short click-through is in part B, "Invite an associate by the scre
 
 Sending real mail is not built (Resend, decisions row 8): the link only appears in the dev terminal until it is.
 
-## H. Export button (not built yet; fill in when `feat/export-button` merges)
+## H. Export button (merged #91, 2026-11-09; not yet clicked through in a browser)
 
 | # | Do | Expect |
 |---|---|---|
