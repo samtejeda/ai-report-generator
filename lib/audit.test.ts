@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { drizzle } from "drizzle-orm/neon-serverless";
 import * as schema from "@/lib/db/schema";
-import { AUDIT_ACTIONS, AUDIT_EXPORT_FORMATS, AUDIT_METADATA_KEYS, audit, buildAuditRow } from "./audit";
+import { SECTION_FLAGS, EXTRACT_FIELDS } from "@/lib/ai/pipeline/schemas";
+import { AUDIT_ACTIONS, AUDIT_EXPORT_FORMATS, AUDIT_MISSING_FIELDS, AUDIT_SECTION_FLAGS, AUDIT_METADATA_KEYS, audit, buildAuditRow } from "./audit";
 
 const org = "11111111-1111-4111-8111-111111111111";
 
@@ -162,3 +163,33 @@ describe("invitation audit rows (feat/invitations)", () => {
     }
   });
 });
+
+describe("real-mode generation vocabulary (flags, missing, generation_warned)", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+
+  it("the closed lists equal the pipeline's own lists, so a flag added there cannot slip past here unnoticed", () => {
+    expect([...AUDIT_SECTION_FLAGS]).toEqual([...SECTION_FLAGS]);
+    expect([...AUDIT_MISSING_FIELDS]).toEqual([...EXTRACT_FIELDS]);
+  });
+
+  it("a warning row carries ids, role, mode, a model tag and category names, nothing else", () => {
+    const row = buildAuditRow({
+      action: "report.generation_warned",
+      resourceType: "report_generation",
+      resourceId: id,
+      metadata: { role: "owner", mode: "real", model: "qwen3:1.7b", latency_ms: 1200, missing: "observations,quotes", flags: "insufficient_input,sensitive_content_detected" },
+    });
+    expect(row.metadata.missing).toBe("observations,quotes");
+  });
+
+  it("flags and missing accept only comma lists of known names, without repeats, and never free text", () => {
+    for (const key of ["flags", "missing"] as const) {
+      for (const bad of ["", "free text about a child", "observations,", ",observations", "observations,observations", "insufficient_input, quotes", 5, true, "OBSERVATIONS"]) {
+        expect(() => buildAuditRow({ action: "report.generated", resourceType: "report_version", resourceId: id, metadata: { [key]: bad } }), `${key}: ${String(bad)}`).toThrow(/known name list/);
+      }
+    }
+    expect(() => buildAuditRow({ action: "report.generated", resourceType: "report_version", resourceId: id, metadata: { flags: "quotes" } })).toThrow(/known name list/);
+    expect(() => buildAuditRow({ action: "report.generated", resourceType: "report_version", resourceId: id, metadata: { missing: "low_confidence_interpretation" } })).toThrow(/known name list/);
+  });
+});
+

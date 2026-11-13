@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import { REPORT_WRITE_ROLES } from "@/lib/auth/permissions";
 import { generatedTextSchema, MAX_SECTION_TEXT } from "./content";
 import { failureStatus, llmMetadataSchema, parseModelConfig } from "./generation";
-import { BUSY_RETRY_SECONDS, GENERATION_CALL_TIMEOUT_MS, GENERATION_LEASE_SECONDS, GENERATION_ROUTE_MAX_SECONDS, MAX_CONCURRENT_GENERATIONS, MAX_STARTS_PER_ORGANIZATION, MAX_STARTS_PER_USER } from "./generation-limits";
+import { MAX_NOTES_CHARS as PIPELINE_MAX_NOTES } from "@/lib/ai/pipeline/pipeline";
+import { BUSY_RETRY_SECONDS, MAX_NOTES_CHARS, GENERATION_CALL_TIMEOUT_MS, GENERATION_LEASE_SECONDS, REAL_BUDGET_MS, REAL_CALL_TIMEOUT_MS, GENERATION_ROUTE_MAX_SECONDS, GENERATION_STUB_ROUTE_SECONDS, MAX_CONCURRENT_GENERATIONS, MAX_STARTS_PER_ORGANIZATION, MAX_STARTS_PER_USER } from "./generation-limits";
 
 describe("model_config is outside input", () => {
   it("accepts nothing, an empty object, and a string stub tag; ignores keys it does not read", () => {
@@ -12,11 +13,13 @@ describe("model_config is outside input", () => {
     expect(parseModelConfig(null)).toEqual({ ok: true, models: {} });
     expect(parseModelConfig({})).toEqual({ ok: true, models: {} });
     expect(parseModelConfig({ stub: "qwen3:1.7b" })).toEqual({ ok: true, models: { stub: "qwen3:1.7b" } });
-    expect(parseModelConfig({ worker: "qwen3:8b", extra: { a: 1 } })).toEqual({ ok: true, models: {} });
+    expect(parseModelConfig({ worker: "qwen3:8b", filter: "qwen3:1.7b", extra: { a: 1 } })).toEqual({ ok: true, models: { filter: "qwen3:1.7b", worker: "qwen3:8b" } });
+    // `heavy` is not wired, so it is not read.
+    expect(parseModelConfig({ heavy: "qwen3:30b-a3b", worker: "w:1" })).toEqual({ ok: true, models: { worker: "w:1" } });
   });
 
-  it("refuses a stub value that is not a short non-empty string, and anything that is not an object", () => {
-    for (const bad of [{ stub: 5 }, { stub: null }, { stub: "" }, { stub: "x".repeat(129) }, { stub: ["a"] }, { stub: { a: 1 } }, "text", 7, [], true]) {
+  it("refuses a stub, filter or worker value that is not a short non-empty string, and anything that is not an object", () => {
+    for (const bad of [{ stub: 5 }, { stub: null }, { stub: "" }, { stub: "x".repeat(129) }, { stub: ["a"] }, { stub: { a: 1 } }, { worker: 5 }, { filter: null }, { worker: "" }, { filter: ["a"] }, "text", 7, [], true]) {
       expect(parseModelConfig(bad), JSON.stringify(bad)).toEqual({ ok: false });
     }
   });
@@ -39,7 +42,48 @@ describe("llm_metadata is closed", () => {
       { ...good, model: "a b" },
       { ...good, inputTokens: -1 },
       { ...good, latencyMs: 1.5 },
-      { ...good, mode: "real" },
+      { ...good, mode: "other" },
+      { ...good, mode: "real" }, // a real-mode record has its own shape
+    ]) {
+      expect(llmMetadataSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+});
+
+describe("llm_metadata, the real variant, is closed too", () => {
+  const pass = (name: string) => ({ pass: name, model: "qwen3:8b", inputTokens: 900, outputTokens: null, latencyMs: 4100, attempts: 1 });
+  const good = {
+    mode: "real",
+    methodologyPromptId: "11111111-1111-4111-8111-111111111111",
+    passes: [pass("filter"), pass("extract"), pass("generate")],
+    flags: ["insufficient_input", "sensitive_content_detected"],
+    costUsd: 0,
+  };
+
+  it("accepts ids, model tags, numbers and flag names", () => {
+    expect(llmMetadataSchema.parse(good)).toEqual(good);
+    expect(llmMetadataSchema.safeParse({ ...good, flags: [] }).success).toBe(true);
+  });
+
+  it("refuses text anywhere: a prompt, an output, an endpoint, a free flag, a URL as a model, a bad id, bad numbers", () => {
+    for (const bad of [
+      { ...good, prompt: "x" },
+      { ...good, output: "x" },
+      { ...good, endpoint: "https://a.b.ts.net" },
+      { ...good, model: "qwen3:8b" },
+      { ...good, costUsd: 0.01 },
+      { ...good, methodologyPromptId: "not-an-id" },
+      { ...good, methodologyPromptId: undefined },
+      { ...good, flags: ["free text about a child"] },
+      { ...good, flags: ["quotes"] },
+      { ...good, flags: ["insufficient_input", "insufficient_input"] },
+      { ...good, passes: [] },
+      { ...good, passes: [pass("filter"), pass("extract"), pass("generate"), pass("generate")] },
+      { ...good, passes: [{ ...pass("filter"), pass: "heavy" }] },
+      { ...good, passes: [{ ...pass("filter"), model: "https://a.b.ts.net/v1" }] },
+      { ...good, passes: [{ ...pass("filter"), text: "notes" }] },
+      { ...good, passes: [{ ...pass("filter"), attempts: 3 }] },
+      { ...good, passes: [{ ...pass("filter"), latencyMs: -1 }] },
     ]) {
       expect(llmMetadataSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
     }
@@ -74,15 +118,26 @@ describe("failure to HTTP status", () => {
 });
 
 describe("limits are sane and consistent", () => {
-  it("the lease outlasts the route's time limit, which outlasts the model call", () => {
+  it("the lease outlasts the route's time limit, which outlasts the real run, which outlasts any one call", () => {
     expect(GENERATION_LEASE_SECONDS).toBeGreaterThan(GENERATION_ROUTE_MAX_SECONDS);
+    expect(GENERATION_ROUTE_MAX_SECONDS * 1000).toBeGreaterThan(REAL_BUDGET_MS);
+    expect(REAL_BUDGET_MS).toBeGreaterThan(REAL_CALL_TIMEOUT_MS);
     expect(GENERATION_ROUTE_MAX_SECONDS * 1000).toBeGreaterThan(GENERATION_CALL_TIMEOUT_MS);
+    // The stub keeps its own small numbers, so its call and its browser wait are as before.
+    expect(GENERATION_STUB_ROUTE_SECONDS * 1000).toBeGreaterThan(GENERATION_CALL_TIMEOUT_MS);
   });
 
   it("the documented numbers (API.md) are the ones in force", () => {
-    expect([MAX_CONCURRENT_GENERATIONS, MAX_STARTS_PER_USER, MAX_STARTS_PER_ORGANIZATION, GENERATION_LEASE_SECONDS, GENERATION_CALL_TIMEOUT_MS, BUSY_RETRY_SECONDS]).toEqual([2, 10, 30, 120, 30_000, 30]);
+    expect([MAX_CONCURRENT_GENERATIONS, MAX_STARTS_PER_USER, MAX_STARTS_PER_ORGANIZATION, GENERATION_LEASE_SECONDS, GENERATION_CALL_TIMEOUT_MS, BUSY_RETRY_SECONDS]).toEqual([2, 10, 30, 360, 30_000, 30]);
+    expect([REAL_CALL_TIMEOUT_MS, REAL_BUDGET_MS, GENERATION_ROUTE_MAX_SECONDS, GENERATION_STUB_ROUTE_SECONDS]).toEqual([120_000, 270_000, 300, 60]);
     const api = readFileSync("API.md", "utf8");
     expect(api).toContain("2 running per practice; 10 per person and 30 per practice per 10 min");
+  });
+});
+
+describe("the notes limit", () => {
+  it("is the pipeline's own (lib/ai may not be imported from the route, so the number is restated and kept equal here)", () => {
+    expect(MAX_NOTES_CHARS).toBe(PIPELINE_MAX_NOTES);
   });
 });
 
@@ -90,8 +145,8 @@ describe("the route", () => {
   const route = readFileSync("app/api/reports/[id]/sections/[sectionId]/generate/route.ts", "utf8");
 
   it("sets maxDuration as a literal (Next.js reads it at build time) equal to the documented limit", () => {
-    expect(route).toMatch(/^export const maxDuration = 60;$/m);
-    expect(GENERATION_ROUTE_MAX_SECONDS).toBe(60);
+    expect(route).toMatch(/^export const maxDuration = 300;$/m);
+    expect(GENERATION_ROUTE_MAX_SECONDS).toBe(300);
   });
 
   it("allows exactly the report writers (the literal list the coverage scan reads equals the constant)", () => {
@@ -114,7 +169,7 @@ describe("who reaches inference", () => {
   }
   const all = ["app", "lib", "components", "scripts"].flatMap((d) => files(d)).filter((f) => !f.startsWith("lib/ai/") && !/\.test\.tsx?$/.test(f));
 
-  it("nothing outside lib/ai imports anything from lib/ai except inference.ts, and only generate-section.ts does that", () => {
+  it("nothing outside lib/ai imports anything from lib/ai except inference.ts, and only the stub and real-mode flows do that", () => {
     const importers: string[] = [];
     for (const file of all) {
       const text = readFileSync(file, "utf8");
@@ -123,7 +178,7 @@ describe("who reaches inference", () => {
         importers.push(file);
       }
     }
-    expect(importers).toEqual(["lib/reports/generate-section.ts"]);
+    expect([...importers].sort()).toEqual(["lib/reports/generate-pipeline.ts", "lib/reports/generate-section.ts"]);
   });
 
   it("no module outside lib/ai mentions a model tag or a prompt (the tag lives in lib/ai/models.ts)", () => {

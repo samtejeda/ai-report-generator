@@ -63,7 +63,7 @@ describe.skipIf(!ENABLED)("report shell through the real stack", () => {
   const auditRows = (orgId: string, action: string) => h.owner.select().from(schema.auditLog).where(and(eq(schema.auditLog.organizationId, orgId), eq(schema.auditLog.action, action)));
 
   const REPORT_KEYS = ["clientId", "createdAt", "finalizedAt", "id", "status", "updatedAt"];
-  const SECTION_KEYS = ["authorName", "editType", "editedAt", "id", "key", "position", "text", "title", "type", "version"];
+  const SECTION_KEYS = ["authorName", "editType", "editedAt", "flags", "id", "key", "position", "text", "title", "type", "version"];
   const VERSION_KEYS = ["authorName", "createdAt", "editType", "id", "text", "version"];
 
   beforeAll(async () => {

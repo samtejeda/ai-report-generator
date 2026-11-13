@@ -1,5 +1,5 @@
 import { readErrorCode, type ApiFailure } from "@/lib/admin/api-call";
-import { GENERATION_ROUTE_MAX_SECONDS } from "@/lib/reports/generation-limits";
+import { GENERATION_STUB_ROUTE_SECONDS } from "@/lib/reports/generation-limits";
 
 /**
  * The one way the report page calls the generate route from the browser. It returns the HTTP status,
@@ -13,8 +13,8 @@ export type GenerateResult =
   | { ok: true }
   | { ok: false; failure: ApiFailure | null; retryAfterSeconds: number | null };
 
-/** The route stops at its own limit; the browser waits a little longer than that, then lets go. */
-export const BROWSER_WAIT_MS = (GENERATION_ROUTE_MAX_SECONDS + 5) * 1000;
+/** The stub request is expected to end within its own limit; the browser waits a little longer than that, then lets go. The real-mode wait is the frontend PR's to choose. */
+export const BROWSER_WAIT_MS = (GENERATION_STUB_ROUTE_SECONDS + 5) * 1000;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

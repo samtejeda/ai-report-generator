@@ -15,7 +15,7 @@ import { parseModelConfig, type GenerationFailure, type LlmMetadata } from "@/li
 import { generatedTextSchema } from "@/lib/reports/content";
 import { reportVisibilityFilter } from "./report-access";
 import { auditLog, reports, reportSections, reportVersions } from "./schema";
-import { tenantDb } from "./tenant";
+import { tenantDb, type TenantDb } from "./tenant";
 
 /**
  * The three database steps of one section generation (the stub loop). No step holds a
@@ -33,7 +33,7 @@ import { tenantDb } from "./tenant";
  */
 
 type Db = Parameters<typeof tenantDb>[1];
-type Mode = "stub";
+type Mode = "stub" | "real";
 
 function assertWriter(session: SessionContext) {
   if (!(REPORT_WRITE_ROLES as readonly string[]).includes(session.role)) throw new Error("generating a section is not allowed for this role");
@@ -42,8 +42,68 @@ function assertWriter(session: SessionContext) {
 const lease = sql`make_interval(secs => ${GENERATION_LEASE_SECONDS})`;
 const window = sql`make_interval(secs => ${RATE_WINDOW_SECONDS})`;
 
+/** The transaction handle `tenantDb(...).transaction` gives a callback. */
+export type Tx = Pick<TenantDb, "find" | "update" | "insert" | "lock" | "get" | "organization">;
+type ReportRow = typeof reports.$inferSelect;
+
+/**
+ * A run that never finished (its function was killed) is abandoned once the lease is over: move it
+ * to error, with its failure row, and return the status the report has now. Shared by the stub claim
+ * and the real flow's precheck and claim, so the lease rule is in one place.
+ */
+export async function reclaimIfStale(t: Tx, report: ReportRow, session: SessionContext): Promise<ReportRow["status"]> {
+  if (report.status !== "generating") return report.status;
+  const reclaimed = await t.update(reports, report.id, { status: "error" }, and(eq(reports.status, "generating"), sql`${reports.updatedAt} < now() - ${lease}`));
+  if (!reclaimed[0]) return report.status;
+  await t.insert(auditLog, {
+    ...buildAuditRow({ action: "report.generation_failed", resourceType: "report", resourceId: report.id, outcome: "failure", metadata: { reason: "stale" satisfies GenerationFailure, role: session.role } }),
+    actorUserId: session.userId,
+    requestId: null,
+  });
+  return "error";
+}
+
+/** Only an empty prose section may be generated: a person's text is never silently replaced. */
+export async function sectionIsGeneratable(t: Tx, section: typeof reportSections.$inferSelect): Promise<boolean> {
+  if (section.sectionType !== "prose") return false;
+  const [existing] = await t.find(reportVersions, { where: eq(reportVersions.sectionId, section.id), limit: 1 });
+  return !existing;
+}
+
+/**
+ * Starts are the audit rows written by the claim (or the real flow's precheck), inside the practice
+ * lock. Returns null when the caller may start, else how long until they may.
+ */
+export async function startRateLimit(t: Tx, session: SessionContext): Promise<{ retryAfterSeconds: number } | null> {
+  const startedRows = (limit: number, actorOnly: boolean) =>
+    t.find(auditLog, {
+      where: and(
+        eq(auditLog.action, "report.generation_started"),
+        actorOnly ? eq(auditLog.actorUserId, session.userId) : undefined,
+        gt(auditLog.createdAt, sql`now() - ${window}`),
+      ),
+      orderBy: desc(auditLog.createdAt),
+      limit,
+    });
+  for (const [limit, actorOnly] of [[MAX_STARTS_PER_USER, true], [MAX_STARTS_PER_ORGANIZATION, false]] as const) {
+    const rows = await startedRows(limit, actorOnly);
+    if (rows.length >= limit) {
+      // The oldest of the newest `limit` starts is the one that has to age out of the window.
+      const oldest = rows[rows.length - 1].createdAt.getTime();
+      return { retryAfterSeconds: Math.max(1, Math.ceil(RATE_WINDOW_SECONDS - (Date.now() - oldest) / 1000)) };
+    }
+  }
+  return null;
+}
+
+/** Concurrency: live generations only (a run past its lease does not count). True when the practice is at its cap. */
+export async function atConcurrencyCap(t: Tx): Promise<boolean> {
+  const running = await t.find(reports, { where: and(eq(reports.status, "generating"), sql`${reports.updatedAt} >= now() - ${lease}`), limit: MAX_CONCURRENT_GENERATIONS });
+  return running.length >= MAX_CONCURRENT_GENERATIONS;
+}
+
 export type ClaimResult =
-  | { ok: true; baseUrl: string; models: { stub?: string } }
+  | { ok: true; baseUrl: string; models: { stub?: string; filter?: string; worker?: string } }
   | { ok: false; reason: "not_found" | "not_configured" | "not_generatable" }
   | { ok: false; reason: "rate_limited" | "busy"; retryAfterSeconds: number };
 
@@ -68,49 +128,15 @@ export async function claimGeneration(session: SessionContext, input: { reportId
     const models = parseModelConfig(org?.modelConfig);
     if (!base.ok || !models.ok) return { ok: false, reason: "not_configured" };
 
-    // A run that never finished (its function was killed) is abandoned once the lease is over.
-    let status = report.status;
-    if (status === "generating") {
-      const reclaimed = await t.update(reports, report.id, { status: "error" }, and(eq(reports.status, "generating"), sql`${reports.updatedAt} < now() - ${lease}`));
-      if (reclaimed[0]) {
-        status = "error";
-        await t.insert(auditLog, {
-          ...buildAuditRow({ action: "report.generation_failed", resourceType: "report", resourceId: report.id, outcome: "failure", metadata: { reason: "stale" satisfies GenerationFailure, role: session.role } }),
-          actorUserId: session.userId,
-          requestId: null,
-        });
-      }
-    }
+    const status = await reclaimIfStale(t, report, session);
     if (status !== "draft" && status !== "error") return { ok: false, reason: "not_generatable" };
 
-    // Only an empty prose section: a person's text is never silently replaced.
-    if (section.sectionType !== "prose") return { ok: false, reason: "not_generatable" };
-    const [existing] = await t.find(reportVersions, { where: eq(reportVersions.sectionId, section.id), limit: 1 });
-    if (existing) return { ok: false, reason: "not_generatable" };
+    if (!(await sectionIsGeneratable(t, section))) return { ok: false, reason: "not_generatable" };
 
-    // Rate: starts are the audit rows written by this very function, inside this lock.
-    const startedRows = (limit: number, actorOnly: boolean) =>
-      t.find(auditLog, {
-        where: and(
-          eq(auditLog.action, "report.generation_started"),
-          actorOnly ? eq(auditLog.actorUserId, session.userId) : undefined,
-          gt(auditLog.createdAt, sql`now() - ${window}`),
-        ),
-        orderBy: desc(auditLog.createdAt),
-        limit,
-      });
-    for (const [limit, actorOnly] of [[MAX_STARTS_PER_USER, true], [MAX_STARTS_PER_ORGANIZATION, false]] as const) {
-      const rows = await startedRows(limit, actorOnly);
-      if (rows.length >= limit) {
-        // The oldest of the newest `limit` starts is the one that has to age out of the window.
-        const oldest = rows[rows.length - 1].createdAt.getTime();
-        return { ok: false, reason: "rate_limited", retryAfterSeconds: Math.max(1, Math.ceil(RATE_WINDOW_SECONDS - (Date.now() - oldest) / 1000)) };
-      }
-    }
+    const limited = await startRateLimit(t, session);
+    if (limited) return { ok: false, reason: "rate_limited", retryAfterSeconds: limited.retryAfterSeconds };
 
-    // Concurrency: live generations only (a run past its lease does not count).
-    const running = await t.find(reports, { where: and(eq(reports.status, "generating"), sql`${reports.updatedAt} >= now() - ${lease}`), limit: MAX_CONCURRENT_GENERATIONS });
-    if (running.length >= MAX_CONCURRENT_GENERATIONS) return { ok: false, reason: "busy", retryAfterSeconds: BUSY_RETRY_SECONDS };
+    if (await atConcurrencyCap(t)) return { ok: false, reason: "busy", retryAfterSeconds: BUSY_RETRY_SECONDS };
 
     const moved = await t.update(reports, report.id, { status: "generating" }, eq(reports.status, status));
     if (!moved[0]) return { ok: false, reason: "not_generatable" };
