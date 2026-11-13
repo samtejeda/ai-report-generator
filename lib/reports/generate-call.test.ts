@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BROWSER_WAIT_MS, callGenerateSection, parseRetryAfter } from "./generate-call";
-import { GENERATION_ROUTE_MAX_SECONDS } from "./generation-limits";
+import { GENERATION_STUB_ROUTE_SECONDS } from "./generation-limits";
 
 const REPORT = "11111111-1111-4111-8111-111111111111";
 const SECTION = "22222222-2222-4222-8222-222222222222";
@@ -58,7 +58,7 @@ describe("callGenerateSection", () => {
 
   it("gives up after the route's own limit plus a margin, and says so as a timeout", async () => {
     vi.useFakeTimers();
-    expect(BROWSER_WAIT_MS).toBeGreaterThan(GENERATION_ROUTE_MAX_SECONDS * 1000);
+    expect(BROWSER_WAIT_MS).toBeGreaterThan(GENERATION_STUB_ROUTE_SECONDS * 1000);
     fetchMock.mockImplementation((_url: string, init: RequestInit) => new Promise((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")))));
     const pending = callGenerateSection(REPORT, SECTION);
     await vi.advanceTimersByTimeAsync(BROWSER_WAIT_MS - 1);

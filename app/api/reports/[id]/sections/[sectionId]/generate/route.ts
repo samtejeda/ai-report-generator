@@ -4,10 +4,10 @@ import { guardedRoute } from "@/lib/auth/guard";
 import { failureStatus } from "@/lib/reports/generation";
 import { generateSection } from "@/lib/reports/generate-section";
 
-// The model call can take a while; the call itself gives up after 30 s (lib/reports/generation-limits.ts).
+// The stub call gives up after 30 s; a real-mode run (three passes) is allowed up to 270 s inside this 300 s (lib/reports/generation-limits.ts).
 // Next.js reads this at build time, so it must be a literal number, not an imported constant;
 // lib/reports/generation.test.ts keeps it equal to GENERATION_ROUTE_MAX_SECONDS.
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const params = z.object({ id: z.uuid(), sectionId: z.uuid() });
 const noBody = z.strictObject({});

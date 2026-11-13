@@ -5,7 +5,7 @@ import { claimGeneration, failGeneration, finishGeneration } from "@/lib/db/repo
 import { getEnv } from "@/lib/env";
 import { generatedTextSchema } from "./content";
 import { GENERATION_CALL_TIMEOUT_MS } from "./generation-limits";
-import { llmMetadataSchema, type GenerationFailure } from "./generation";
+import { stubLlmMetadataSchema, type GenerationFailure } from "./generation";
 
 /**
  * One section generation, start to finish (the dev-stub loop). The route calls this and nothing
@@ -65,7 +65,7 @@ export async function generateSection(session: SessionContext, ids: { reportId: 
 
     const text = generatedTextSchema.safeParse(result.text);
     if (!text.success) return await fail("invalid_output");
-    const metadata = llmMetadataSchema.safeParse({
+    const metadata = stubLlmMetadataSchema.safeParse({
       mode: "stub",
       model: result.model,
       inputTokens: result.usage.inputTokens ?? null,
