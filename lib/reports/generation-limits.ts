@@ -35,3 +35,9 @@ export const MAX_STARTS_PER_ORGANIZATION = 30;
 
 /** What to tell a caller who was refused only because other generations are running. */
 export const BUSY_RETRY_SECONDS = 30;
+
+/**
+ * The most characters of session notes a request may carry (the pipeline's own limit, restated here so
+ * the route does not reach into lib/ai; a test keeps the two equal). Long notes degrade a small model.
+ */
+export const MAX_NOTES_CHARS = 20_000;

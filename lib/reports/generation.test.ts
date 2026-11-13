@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import { REPORT_WRITE_ROLES } from "@/lib/auth/permissions";
 import { generatedTextSchema, MAX_SECTION_TEXT } from "./content";
 import { failureStatus, llmMetadataSchema, parseModelConfig } from "./generation";
-import { BUSY_RETRY_SECONDS, GENERATION_CALL_TIMEOUT_MS, GENERATION_LEASE_SECONDS, REAL_BUDGET_MS, REAL_CALL_TIMEOUT_MS, GENERATION_ROUTE_MAX_SECONDS, GENERATION_STUB_ROUTE_SECONDS, MAX_CONCURRENT_GENERATIONS, MAX_STARTS_PER_ORGANIZATION, MAX_STARTS_PER_USER } from "./generation-limits";
+import { MAX_NOTES_CHARS as PIPELINE_MAX_NOTES } from "@/lib/ai/pipeline/pipeline";
+import { BUSY_RETRY_SECONDS, MAX_NOTES_CHARS, GENERATION_CALL_TIMEOUT_MS, GENERATION_LEASE_SECONDS, REAL_BUDGET_MS, REAL_CALL_TIMEOUT_MS, GENERATION_ROUTE_MAX_SECONDS, GENERATION_STUB_ROUTE_SECONDS, MAX_CONCURRENT_GENERATIONS, MAX_STARTS_PER_ORGANIZATION, MAX_STARTS_PER_USER } from "./generation-limits";
 
 describe("model_config is outside input", () => {
   it("accepts nothing, an empty object, and a string stub tag; ignores keys it does not read", () => {
@@ -134,6 +135,12 @@ describe("limits are sane and consistent", () => {
   });
 });
 
+describe("the notes limit", () => {
+  it("is the pipeline's own (lib/ai may not be imported from the route, so the number is restated and kept equal here)", () => {
+    expect(MAX_NOTES_CHARS).toBe(PIPELINE_MAX_NOTES);
+  });
+});
+
 describe("the route", () => {
   const route = readFileSync("app/api/reports/[id]/sections/[sectionId]/generate/route.ts", "utf8");
 
@@ -162,7 +169,7 @@ describe("who reaches inference", () => {
   }
   const all = ["app", "lib", "components", "scripts"].flatMap((d) => files(d)).filter((f) => !f.startsWith("lib/ai/") && !/\.test\.tsx?$/.test(f));
 
-  it("nothing outside lib/ai imports anything from lib/ai except inference.ts, and only generate-section.ts does that", () => {
+  it("nothing outside lib/ai imports anything from lib/ai except inference.ts, and only the stub and real-mode flows do that", () => {
     const importers: string[] = [];
     for (const file of all) {
       const text = readFileSync(file, "utf8");
@@ -171,7 +178,7 @@ describe("who reaches inference", () => {
         importers.push(file);
       }
     }
-    expect(importers).toEqual(["lib/reports/generate-section.ts"]);
+    expect([...importers].sort()).toEqual(["lib/reports/generate-pipeline.ts", "lib/reports/generate-section.ts"]);
   });
 
   it("no module outside lib/ai mentions a model tag or a prompt (the tag lives in lib/ai/models.ts)", () => {
