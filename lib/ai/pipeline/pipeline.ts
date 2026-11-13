@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { PipelineError } from "../errors";
 import { boundContext, noContext, type ContextProvider } from "./context";
-import type { LoadedMethodology } from "./methodology";
+import { mergeSensitiveCategories, type LoadedMethodology } from "./methodology";
 import { createBudget, runPass, type ModelCall, type PassMetadata } from "./passes";
 import { buildExtractPrompt, buildFilterPrompt, buildGeneratePrompt } from "./prompts";
 import {
@@ -10,6 +10,7 @@ import {
   extractAnswerSchema,
   filterAnswerSchema,
   generateAnswerSchema,
+  isUsableSectionText,
   orderFlags,
   type ExtractField,
   type SectionFlag,
@@ -22,8 +23,14 @@ import {
  * methodology plus the extracted fields plus per-request context). Each pass is its own narrow
  * prompt and its own model role; none does another's job.
  *
+ * The methodology is loaded FIRST, before any model is asked anything, so an unusable one (none, a
+ * placeholder, content that does not parse) fails before a single model call. Its optional
+ * `sensitive_categories` list goes to the filter pass and nowhere else.
+ *
  * Not enough input is a normal result, not an error: the section comes back as `[Please provide]`
- * with an `insufficient_input` flag, and the later passes do not run.
+ * with an `insufficient_input` flag, and the later passes do not run. The one exception is
+ * `proceedIfInsufficient` (the person accepted thin notes): then the run goes on and writes what the
+ * notes support, with `[Please provide]` in place where they do not.
  *
  * Everything outside the model is injected (`PipelineDeps`), so the whole thing runs in tests on
  * scripted answers. The real wiring, with the database and the endpoint, is `runPipeline` in
@@ -51,14 +58,32 @@ export type PipelineInput = z.input<typeof pipelineInputSchema>;
 
 export type PipelineDeps = {
   callModel: ModelCall;
-  /** Loads the active methodology for a template, within the caller's practice. Throws PipelineError("methodology_unavailable"). */
+  /** Loads the methodology for a template, within the caller's practice. Throws PipelineError("methodology_unavailable"). */
   loadMethodology: (templateId: string) => Promise<LoadedMethodology>;
   /** RAG SEAM (see context.ts). Defaults to retrieving nothing. */
   retrieveContext?: ContextProvider;
+  /**
+   * Called once, after the filter has said go and before extract: the caller's point of no return
+   * (the route claims the report here). It is awaited, and whatever it throws propagates exactly as
+   * thrown: it is not wrapped, so a refusal by the caller never turns into `internal`. Not called
+   * when the filter stops the run, when a pass fails first, or for empty notes.
+   */
+  onProceed?: () => Promise<void>;
   now?: () => number;
 };
 
-export type PipelineOptions = { budgetMs?: number; callTimeoutMs?: number };
+export type PipelineOptions = {
+  budgetMs?: number;
+  callTimeoutMs?: number;
+  /**
+   * The person has accepted thin notes: a filter result of `sufficient: false` no longer stops the
+   * run. The run goes on (hook, extract, generate) and generate uses the confirmed rule in every
+   * such run, even when the filter says sufficient this time. The model's text is kept (a blank
+   * answer becomes `[Please provide]`), `insufficient_input` is added when the filter said thin
+   * (and stays if the model set it itself), and the outcome is `generated`.
+   */
+  proceedIfInsufficient?: boolean;
+};
 
 export type PipelineResult = {
   outcome: "generated" | "insufficient_input";
@@ -100,12 +125,23 @@ export async function runSectionPipeline(
   const callTimeoutMs = options.callTimeoutMs ?? PIPELINE_CALL_TIMEOUT_MS;
   const passes: PassMetadata[] = [];
 
+  // 0. The practice's methodology for every candidate template (a report has one), through the
+  // tenant data layer, before any model call.
+  const loadedByTemplate = new Map<string, LoadedMethodology>();
+  for (const t of templates) {
+    try {
+      loadedByTemplate.set(t.id, await deps.loadMethodology(t.id));
+    } catch (error) {
+      throw error instanceof PipelineError ? error : new PipelineError("internal");
+    }
+  }
+
   // 1. filter
   const candidates = templates.map((t) => t.slug);
   const filtered = await runPass({
     pass: "filter",
     schema: filterAnswerSchema,
-    prompt: buildFilterPrompt({ candidates, section, notes }),
+    prompt: buildFilterPrompt({ candidates, section, notes, sensitiveCategories: mergeSensitiveCategories([...loadedByTemplate.values()].map((l) => l.methodology)) }),
     check: (a) => candidates.includes(a.template),
     callModel: deps.callModel,
     callTimeoutMs,
@@ -113,10 +149,14 @@ export async function runSectionPipeline(
   });
   passes.push(filtered.meta);
   const template = templates.find((t) => t.slug === filtered.data.template);
-  if (!template) throw new PipelineError("internal", "filter");
+  const loaded = template ? loadedByTemplate.get(template.id) : undefined;
+  if (!template || !loaded) throw new PipelineError("internal", "filter");
   const sensitive = filtered.data.sensitive_content_detected;
 
-  if (!filtered.data.sufficient) {
+  const thin = !filtered.data.sufficient;
+  const confirmed = options.proceedIfInsufficient === true;
+
+  if (thin && !confirmed) {
     return {
       outcome: "insufficient_input",
       section: { key: sectionKey, content: PLEASE_PROVIDE, flags: orderFlags(["insufficient_input", ...(sensitive ? (["sensitive_content_detected"] as const) : [])]) },
@@ -127,13 +167,8 @@ export async function runSectionPipeline(
     };
   }
 
-  // The practice's methodology for the chosen template, through the tenant data layer.
-  let loaded: LoadedMethodology;
-  try {
-    loaded = await deps.loadMethodology(template.id);
-  } catch (error) {
-    throw error instanceof PipelineError ? error : new PipelineError("internal");
-  }
+  // The filter said go (or the person confirmed): the caller's hook runs now, before any more model work. Its failure is not ours to reword.
+  await deps.onProceed?.();
 
   // 2. extract
   const extracted = await runPass({
@@ -158,7 +193,9 @@ export async function runSectionPipeline(
   const generated = await runPass({
     pass: "generate",
     schema: generateAnswerSchema,
-    prompt: buildGeneratePrompt({ methodology: loaded.methodology, section, extracted: extracted.data, context }),
+    prompt: buildGeneratePrompt({ methodology: loaded.methodology, section, extracted: extracted.data, context, confirmed }),
+    // Text we are going to keep must pass the same rules as text a person may save (a normal run drops it instead).
+    check: confirmed ? (a) => a.content.trim() === "" || isUsableSectionText(a.content) : undefined,
     callModel: deps.callModel,
     callTimeoutMs,
     budget,
@@ -167,6 +204,23 @@ export async function runSectionPipeline(
 
   const flags = new Set<SectionFlag>(generated.data.flags);
   if (sensitive) flags.add("sensitive_content_detected");
+
+  if (confirmed) {
+    // The person accepted thin notes: keep what was written. The flag is forced only when the filter
+    // said thin; if the model set it itself it stays. Blank text (only possible with that flag) is
+    // never stored as blank.
+    if (thin) flags.add("insufficient_input");
+    const text = generated.data.content.trim();
+    return {
+      outcome: "generated",
+      section: { key: sectionKey, content: text === "" ? PLEASE_PROVIDE : text, flags: orderFlags(flags) },
+      template,
+      methodologyPromptId: loaded.promptId,
+      missingFields: thin ? filtered.data.missing_fields : [],
+      passes,
+    };
+  }
+
   const insufficient = flags.has("insufficient_input");
   return {
     outcome: insufficient ? "insufficient_input" : "generated",
