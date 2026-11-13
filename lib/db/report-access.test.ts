@@ -103,8 +103,8 @@ describe("author names", () => {
   it("the views carry a display name and no id, email or role of the author", () => {
     const keys = (o: Record<string, unknown>) => Object.keys(o).sort();
     const version: VersionView = { id: "x", version: 1, editType: "human_edit", text: "", createdAt: "", authorName: null };
-    const section: SectionView = { id: "x", key: "", title: "", type: "prose", position: 1, text: "", version: 0, editType: null, editedAt: null, authorName: null };
+    const section: SectionView = { id: "x", key: "", title: "", type: "prose", position: 1, text: "", version: 0, editType: null, editedAt: null, authorName: null, flags: [] };
     expect(keys(version)).toEqual(["authorName", "createdAt", "editType", "id", "text", "version"]);
-    expect(keys(section)).toEqual(["authorName", "editType", "editedAt", "id", "key", "position", "text", "title", "type", "version"]);
+    expect(keys(section)).toEqual(["authorName", "editType", "editedAt", "flags", "id", "key", "position", "text", "title", "type", "version"]);
   });
 });

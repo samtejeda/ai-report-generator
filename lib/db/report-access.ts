@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { SessionContext } from "@/lib/auth/session";
 import { parseProseContent } from "@/lib/reports/content";
+import { llmMetadataSchema } from "@/lib/reports/generation";
 import { parseTemplateStructure } from "@/lib/reports/structure";
 import { z } from "zod";
 import { visibilityFilter, clampPage } from "./client-access";
@@ -40,6 +41,12 @@ export type SectionView = {
   editedAt: string | null;
   /** Display name of whoever wrote the current version; null when nobody has, or the model did. Never an id or an email. */
   authorName: string | null;
+  /**
+   * Review prompts the pipeline attached to the current version (insufficient_input,
+   * sensitive_content_detected, low_confidence_interpretation), from a closed list; empty for a stub or
+   * human version. A person's save is a new version without them: saving is the review.
+   */
+  flags: string[];
 };
 
 export type ReportDetail = ReportView & { templateSlug: string; sections: SectionView[] };
@@ -99,6 +106,12 @@ export async function authorNames(t: Pick<TenantDb, "find">, versions: { created
   return new Map(rows.map((u) => [u.id, u.displayName]));
 }
 
+/** The flags recorded with a generation, read back through the closed schema (anything else is no flags). */
+function flagsOf(metadata: unknown): string[] {
+  const parsed = llmMetadataSchema.safeParse(metadata);
+  return parsed.success && parsed.data.mode === "real" ? parsed.data.flags : [];
+}
+
 export type ListFilter = { clientId?: string; status?: (typeof REPORT_STATUSES)[number]; limit?: number; offset?: number };
 
 export async function listReports(session: SessionContext, filter: ListFilter = {}, db?: Db): Promise<ReportView[]> {
@@ -149,6 +162,7 @@ export async function readReportDetail(t: Pick<TenantDb, "find">, report: Report
         editType: v?.editType ?? null,
         editedAt: v ? v.createdAt.toISOString() : null,
         authorName: (v?.createdByUserId && names.get(v.createdByUserId)) || null,
+        flags: flagsOf(v?.llmMetadata),
       };
     }),
   };
