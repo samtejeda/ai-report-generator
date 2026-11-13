@@ -389,15 +389,15 @@ describe.skipIf(!ENABLED)("section generation through the real stack", () => {
       expect((await reportRow(r.reportId)).status).toBe("draft");
     });
 
-    it("INFERENCE_MODE other than stub: the same refusal before the database is touched", async () => {
+    it("INFERENCE_MODE=real is the pipeline route now (it needs the notes body): the stub's body-less request is a 400, before the database is touched", async () => {
       const env = getEnv() as { INFERENCE_MODE: string };
       env.INFERENCE_MODE = "real";
       try {
         const r = await mkReport(A, A.c1.id);
         const before = (await startRows(A.orgId)).length;
         const res = await gen(A.owner, r.reportId, r.sections[0].id);
-        expect(res.status).toBe(409);
-        expect(res.json.error?.code).toBe("inference_not_configured");
+        expect(res.status).toBe(400);
+        expect(res.json.error?.code).toBe("validation_failed");
         expect(outbound).toHaveLength(0);
         expect((await reportRow(r.reportId)).status).toBe("draft");
         expect((await startRows(A.orgId)).length).toBe(before);
