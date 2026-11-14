@@ -17,6 +17,9 @@ import { methodologyPrompts } from "./templates";
 import { users } from "./users";
 
 export const REPORT_STATUSES = ["draft", "generating", "generated", "finalized", "error"] as const;
+// The status a report had when a generation claimed it (migration 0017). Set and cleared by the
+// reports_enforce_status trigger, never by the app: it is only meaningful while status = 'generating'.
+export const REPORT_STATUSES_BEFORE_GENERATION = ["draft", "error", "generated"] as const;
 export const SECTION_TYPES = ["prose", "structured"] as const;
 export const EDIT_TYPES = ["ai_generated", "human_edit", "ai_regenerated_section"] as const;
 
@@ -31,6 +34,7 @@ export const reports = pgTable(
     methodologyPromptId: uuid("methodology_prompt_id").notNull(),
     status: text("status", { enum: REPORT_STATUSES }).notNull().default("draft"),
     finalizedAt: timestamp("finalized_at", { withTimezone: true }),
+    statusBeforeGeneration: text("status_before_generation", { enum: REPORT_STATUSES_BEFORE_GENERATION }),
     createdByUserId: uuid("created_by_user_id").notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -63,6 +67,10 @@ export const reports = pgTable(
     // Status transitions are validated in the app (finalize only from generated); this
     // keeps the two fields from disagreeing.
     check("reports_finalized_consistent", sql`(${t.status} = 'finalized') = (${t.finalizedAt} is not null)`),
+    check(
+      "reports_status_before_generation_valid",
+      sql`${t.statusBeforeGeneration} is null or (${t.status} = 'generating' and ${t.statusBeforeGeneration} in ('draft','error','generated'))`,
+    ),
   ],
 );
 

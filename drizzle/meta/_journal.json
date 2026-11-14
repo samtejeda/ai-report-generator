@@ -120,6 +120,13 @@
       "when": 1794005719521,
       "tag": "0016_accept_invitation",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1794674024207,
+      "tag": "0017_report_status_regenerate",
+      "breakpoints": true
     }
   ]
 }

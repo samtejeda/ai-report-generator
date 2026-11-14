@@ -2,15 +2,21 @@ import type { REPORT_STATUSES } from "@/lib/db/schema/reports";
 
 /**
  * Report status transitions, in one place. The database enforces the same table with a trigger
- * (migration 0013, `reports_enforce_status`); lib/reports/status.test.ts keeps the two equal.
+ * (`reports_enforce_status`, migration 0013, replaced by 0017); lib/reports/status.test.ts keeps
+ * the two equal.
  *
- *   draft -> generating -> generated -> finalized
+ *   draft -> generating <-> generated -> finalized
  *                |  ^
  *                v  |
  *               error
  *
+ * `generated -> generating` (0017) lets a generated report generate again: another empty section,
+ * or a regenerated one. `reports.status_before_generation` records where a generation started
+ * from (set and cleared by the trigger), so a later change can send a failed regenerate back to
+ * `generated` (`generating -> generated` already exists) rather than to `error`.
+ *
  * Only `generated -> finalized` is performed by a user-facing route in the report shell. The
- * others belong to generation (the inference PR) and have no route yet.
+ * others belong to generation.
  * A finalized report never changes status again; amending one is a policy question nobody has
  * answered (PROGRESS.md), so there is deliberately no way back.
  */
@@ -21,6 +27,7 @@ export const REPORT_TRANSITIONS: readonly (readonly [ReportStatus, ReportStatus]
   ["generating", "generated"],
   ["generating", "error"],
   ["error", "generating"],
+  ["generated", "generating"],
   ["generated", "finalized"],
 ];
 
