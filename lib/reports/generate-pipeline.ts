@@ -1,7 +1,7 @@
 import { PipelineError, runPipeline, toGenerationFailure, type PipelineResult } from "@/lib/ai/inference";
 import { AUDIT_MISSING_FIELDS, audit } from "@/lib/audit";
 import type { SessionContext } from "@/lib/auth/session";
-import { failGeneration, finishGeneration } from "@/lib/db/report-generate";
+import { failGeneration, finishGeneration, type FromStatus } from "@/lib/db/report-generate";
 import { claimAtProceed, precheckGeneration, recordFailure, type ProceedClaim } from "@/lib/db/report-generate-pipeline";
 import { generatedTextSchema } from "./content";
 import { REAL_BUDGET_MS, REAL_CALL_TIMEOUT_MS } from "./generation-limits";
@@ -25,7 +25,14 @@ import { llmMetadataSchema, type GenerationFailure } from "./generation";
  *   2nd call with `confirm: true`: the run goes on and writes the section with `[Please provide]`
  *             where the notes do not support it, `insufficient_input` flagged, never invented detail.
  *
- * The report is claimed (draft|error -> generating) only after the filter, in the pipeline's
+ * Regenerate (Sam, 2026-11-14): on a `generated` report this also fills another empty section, or adds a NEW
+ * version above a section that has text (`baseVersion + 1`, `ai_regenerated_section`; nothing is overwritten).
+ * The request names the version the person saw (`baseVersion`), checked at the precheck, at the claim and at
+ * the finish. A person's own edit is replaced only with `replaceEdited: true` (asked first, before any model
+ * call or quota). The model never sees the old text: a regenerate runs from the notes alone. A failed run
+ * returns the report to the status it was claimed from (`generated` stays `generated`, text untouched).
+ *
+ * The report is claimed (draft|error|generated -> generating) only after the filter, in the pipeline's
  * `onProceed` hook, so a warning never leaves it generating. From the claim on, whatever goes wrong
  * ends in `error` in one guarded transaction; if even that cannot be written, the lease in
  * generation-limits.ts lets the next request reclaim the report. A failure before the claim writes
@@ -33,8 +40,9 @@ import { llmMetadataSchema, type GenerationFailure } from "./generation";
  */
 
 export type PipelineGenerateOutcome =
-  | { ok: true; outcome: "generated"; section: { id: string; version: 1; editType: "ai_generated"; text: string }; flags: PipelineResult["section"]["flags"] }
-  | { ok: true; outcome: "needs_confirmation"; reportStatus: "draft" | "error"; missing: PipelineResult["missingFields"]; sensitive: boolean }
+  | { ok: true; outcome: "generated"; section: { id: string; version: number; editType: "ai_generated" | "ai_regenerated_section"; text: string }; flags: PipelineResult["section"]["flags"] }
+  | { ok: true; outcome: "needs_confirmation"; reason: "thin_notes"; reportStatus: FromStatus; missing: PipelineResult["missingFields"]; sensitive: boolean }
+  | { ok: true; outcome: "needs_confirmation"; reason: "edited_text"; reportStatus: "generated" }
   | { ok: false; kind: "not_found" | "conflict" | "not_configured" }
   | { ok: false; kind: "rate_limited"; retryAfterSeconds: number }
   | { ok: false; kind: "failed"; reason: GenerationFailure };
@@ -51,23 +59,26 @@ const sum = (values: (number | null)[]): number | undefined => (values.some((v) 
 export async function generateSectionWithPipeline(
   session: SessionContext,
   ids: { reportId: string; sectionId: string },
-  input: { notes: string; confirm: boolean },
+  input: { notes: string; confirm: boolean; baseVersion: number; replaceEdited: boolean },
 ): Promise<PipelineGenerateOutcome> {
   const actor = { organizationId: session.organizationId, actorUserId: session.userId };
 
-  const pre = await precheckGeneration(session, ids);
+  const target = { ...ids, baseVersion: input.baseVersion, replaceEdited: input.replaceEdited };
+  const pre = await precheckGeneration(session, target);
   if (!pre.ok) {
+    if (pre.reason === "edited_text") return { ok: true, outcome: "needs_confirmation", reason: "edited_text", reportStatus: "generated" };
     if (pre.reason === "rate_limited" || pre.reason === "busy") return { ok: false, kind: "rate_limited", retryAfterSeconds: pre.retryAfterSeconds };
     return { ok: false, kind: pre.reason === "not_generatable" ? "conflict" : pre.reason };
   }
 
-  let claimed = false;
+  // The status the claim moved the report out of, once it has (what a regenerate or a failure is recorded against).
+  let claimedFrom: FromStatus | null = null;
 
-  // Ends a failed run: from the claim on, to `error` with the failure row; before it, the row alone.
+  // Ends a failed run: from the claim on, back to the status it was claimed from (`generated` or `error`) with the failure row; before it, the row alone.
   const fail = async (reason: GenerationFailure): Promise<PipelineGenerateOutcome> => {
     try {
-      if (claimed) await failGeneration(session, { reportId: ids.reportId, reason, mode: "real" });
-      else await recordFailure(session, { reportId: ids.reportId, reason });
+      if (claimedFrom) await failGeneration(session, { reportId: ids.reportId, reason, mode: "real" });
+      else await recordFailure(session, { reportId: ids.reportId, reason, fromStatus: pre.status });
     } catch {
       // Nothing more can be done here; the lease frees the report. Code only, no payload.
       console.error(JSON.stringify({ event: "generation_fail_write_failed", reason }));
@@ -91,9 +102,9 @@ export async function generateSectionWithPipeline(
           methodologyPromptId: pre.methodologyPromptId,
           proceedIfInsufficient: input.confirm,
           onProceed: async () => {
-            const claim = await claimAtProceed(session, ids);
+            const claim = await claimAtProceed(session, target);
             if (!claim.ok) throw new ClaimRefused(claim);
-            claimed = true;
+            claimedFrom = claim.fromStatus;
           },
         },
       );
@@ -113,7 +124,7 @@ export async function generateSectionWithPipeline(
 
     // The filter found the notes thin and the person has not confirmed: nothing was generated and the
     // report is untouched. Say what is missing (category names from a closed list, never notes or model words).
-    if (!claimed) {
+    if (!claimedFrom) {
       if (result.outcome !== "insufficient_input") return await fail("internal");
       const filter = result.passes.find((p) => p.pass === "filter");
       const sensitive = result.section.flags.includes("sensitive_content_detected");
@@ -125,12 +136,13 @@ export async function generateSectionWithPipeline(
         metadata: {
           role: session.role,
           mode: "real",
+          from_status: pre.status,
           ...(filter ? { model: filter.model, latency_ms: filter.latencyMs } : {}),
           ...(missing.length > 0 ? { missing: missing.join(",") } : {}),
           ...(sensitive ? { flags: "sensitive_content_detected" } : {}),
         },
       });
-      return { ok: true, outcome: "needs_confirmation", reportStatus: pre.status, missing, sensitive };
+      return { ok: true, outcome: "needs_confirmation", reason: "thin_notes", reportStatus: pre.status, missing, sensitive };
     }
 
     // Claimed: store what came back. It is untrusted until it has passed the same checks as text a person may save.
@@ -142,7 +154,7 @@ export async function generateSectionWithPipeline(
       : null;
     if (!text.success || !metadata?.success) return await fail("invalid_output");
 
-    const finished = await finishGeneration(session, { ...ids, text: text.data, metadata: metadata.data });
+    const finished = await finishGeneration(session, { ...ids, baseVersion: input.baseVersion, text: text.data, metadata: metadata.data });
     if (!finished.ok) {
       if (finished.reason === "invalid_output") return await fail("invalid_output");
       // The claim was reclaimed (or access ended) while the model worked: nothing of ours was stored.
@@ -155,12 +167,13 @@ export async function generateSectionWithPipeline(
     const inputTokens = sum(result.passes.map((p) => p.inputTokens));
     const outputTokens = sum(result.passes.map((p) => p.outputTokens));
     await audit(actor, {
-      action: "report.generated",
+      action: finished.editType === "ai_regenerated_section" ? "report.regenerated" : "report.generated",
       resourceType: "report_version",
       resourceId: finished.versionId,
       metadata: {
         role: session.role,
         mode: "real",
+        from_status: claimedFrom,
         model: last.model,
         latency_ms: result.passes.reduce((a, p) => a + p.latencyMs, 0),
         ...(inputTokens !== undefined ? { input_tokens: inputTokens } : {}),
@@ -168,7 +181,7 @@ export async function generateSectionWithPipeline(
         ...(result.section.flags.length > 0 ? { flags: result.section.flags.join(",") } : {}),
       },
     });
-    return { ok: true, outcome: "generated", section: { id: ids.sectionId, version: 1, editType: "ai_generated", text: text.data }, flags: result.section.flags };
+    return { ok: true, outcome: "generated", section: { id: ids.sectionId, version: finished.version, editType: finished.editType, text: text.data }, flags: result.section.flags };
   } catch {
     return await fail("internal");
   }
