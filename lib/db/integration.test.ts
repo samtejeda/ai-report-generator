@@ -730,7 +730,7 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
       expect(await activeOwners(p.orgId)).toBe(1);
     });
   });
-  describe("report integrity (feat/report-shell; migration 0013)", () => {
+  describe("report integrity (feat/report-shell; migration 0013, one step added by 0017)", () => {
     // A fresh report (and one section) for each test, created as the table owner so any starting
     // status can be set directly; the triggers under test fire on UPDATE and on version INSERT.
     async function freshReport(status: "draft" | "generating" | "generated" | "error" | "finalized" = "draft") {
@@ -763,7 +763,8 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
       await expectPgError(setStatus(r.reportId, "draft"), RESTRICT_VIOLATION);
       await setStatus(r.reportId, "generated");
       await expectPgError(setStatus(r.reportId, "draft"), RESTRICT_VIOLATION);
-      await expectPgError(setStatus(r.reportId, "generating"), RESTRICT_VIOLATION);
+      await setStatus(r.reportId, "generating"); // regenerate (migration 0017); 0013 refused this
+      await setStatus(r.reportId, "generated");
       await setStatus(r.reportId, "finalized", true);
       for (const back of ["draft", "generating", "generated", "error"]) await expectPgError(setStatus(r.reportId, back), RESTRICT_VIOLATION);
     });
@@ -854,6 +855,125 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
         c1.release();
         c2.release();
       }
+    });
+  });
+
+  describe("generated reports may generate again (feat/status-regenerate; migration 0017)", () => {
+    async function freshReport(status: "draft" | "generating" | "generated" | "error" | "finalized") {
+      const [client] = await owner.insert(schema.clients).values({ organizationId: A.orgId, displayName: "Synthetic regenerate" }).returning();
+      const [report] = await owner
+        .insert(schema.reports)
+        .values({
+          organizationId: A.orgId, clientId: client.id, templateId: A.templateId, methodologyPromptId: A.promptId, createdByUserId: A.userId,
+          status, finalizedAt: status === "finalized" ? new Date() : null,
+        })
+        .returning();
+      return report.id;
+    }
+    const setStatus = (id: string, status: string, finalized = false) =>
+      asOrg(A.orgId, (tx) => tx.execute(finalized ? sql`update reports set status = ${status}, finalized_at = now() where id = ${id}` : sql`update reports set status = ${status} where id = ${id}`));
+    const row = async (id: string) => (await owner.select().from(schema.reports).where(eq(schema.reports.id, id)))[0];
+
+    it("generated -> generating is allowed for the app role, and the report can then finish or fail", async () => {
+      const id = await freshReport("generated");
+      await setStatus(id, "generating");
+      expect((await row(id)).status).toBe("generating");
+      await setStatus(id, "generated"); // a failed regenerate goes back to generated: this step already exists
+      expect((await row(id)).status).toBe("generated");
+      await setStatus(id, "generating");
+      await setStatus(id, "error");
+      expect((await row(id)).status).toBe("error");
+    });
+
+    it("the rest of the table is as before: draft cannot jump to generated or finalized, generating -> generated and -> error still work", async () => {
+      const id = await freshReport("draft");
+      await expectPgError(setStatus(id, "generated"), RESTRICT_VIOLATION);
+      await expectPgError(setStatus(id, "finalized", true), RESTRICT_VIOLATION);
+      await setStatus(id, "generating");
+      await setStatus(id, "generated");
+      await setStatus(id, "generating");
+      await setStatus(id, "error");
+      await setStatus(id, "generating");
+      await setStatus(id, "generated");
+      await expectPgError(setStatus(id, "error"), RESTRICT_VIOLATION); // generated -> error was never allowed
+      await expectPgError(setStatus(id, "draft"), RESTRICT_VIOLATION);
+    });
+
+    it("a finalized report never changes status again: not to generating, and not to anything else, from the app or the owner", async () => {
+      const id = await freshReport("finalized");
+      for (const to of ["draft", "generating", "generated", "error"]) {
+        await expectPgError(setStatus(id, to), RESTRICT_VIOLATION);
+        await expectPgError(owner.execute(sql`update reports set status = ${to}, finalized_at = null where id = ${id}`), RESTRICT_VIOLATION);
+      }
+      const after = await row(id);
+      expect(after.status).toBe("finalized");
+      expect(after.statusBeforeGeneration).toBeNull();
+    });
+
+    it("status_before_generation is set by the trigger when a report enters generating and cleared when it leaves, and the app cannot write it", async () => {
+      for (const from of ["draft", "error", "generated"] as const) {
+        const id = await freshReport(from);
+        expect((await row(id)).statusBeforeGeneration).toBeNull();
+        await setStatus(id, "generating");
+        expect((await row(id)).statusBeforeGeneration).toBe(from);
+        await setStatus(id, "generated");
+        expect((await row(id)).statusBeforeGeneration).toBeNull();
+      }
+      const id = await freshReport("generated");
+      await setStatus(id, "generating");
+      await setStatus(id, "error");
+      expect((await row(id)).statusBeforeGeneration).toBeNull();
+      await setStatus(id, "generating");
+      expect((await row(id)).statusBeforeGeneration).toBe("error");
+      // Not writable by the app role, and not forgeable by anyone: the trigger overrides a supplied value.
+      await expectPgError(asOrg(A.orgId, (tx) => tx.execute(sql`update reports set status_before_generation = 'draft' where id = ${id}`)), INSUFFICIENT_PRIVILEGE);
+      const g = await freshReport("generated");
+      await owner.execute(sql`update reports set status = 'generating', status_before_generation = 'draft' where id = ${g}`);
+      expect((await row(g)).statusBeforeGeneration).toBe("generated");
+    });
+
+    it("the column holds only a starting status, and only while the report is generating (table check)", async () => {
+      const g = await freshReport("generating");
+      await expectPgError(owner.execute(sql`update reports set status_before_generation = 'finalized' where id = ${g}`), CHECK_VIOLATION);
+      await expectPgError(owner.execute(sql`update reports set status_before_generation = 'generating' where id = ${g}`), CHECK_VIOLATION);
+      const d = await freshReport("draft");
+      await expectPgError(owner.execute(sql`update reports set status_before_generation = 'draft' where id = ${d}`), CHECK_VIOLATION);
+    });
+
+    it("another practice cannot move this practice's report, including generated -> generating (RLS)", async () => {
+      const id = await freshReport("generated");
+      await asOrg(B.orgId, (tx) => tx.execute(sql`update reports set status = 'generating' where id = ${id}`)); // matches no row under B's policy
+      const after = await row(id);
+      expect(after.status).toBe("generated");
+      expect(after.statusBeforeGeneration).toBeNull();
+    });
+
+    it("a regenerate claim and a finalize at the same moment take turns: the one that commits second is refused", async () => {
+      const id = await freshReport("generated");
+      const c1 = await appPool.connect();
+      const c2 = await appPool.connect();
+      const bind = async (c: typeof c1) => {
+        await c.query("begin");
+        await c.query("select set_config('app.organization_id', $1, true)", [A.orgId]);
+      };
+      try {
+        await bind(c1);
+        await c1.query("update reports set status = 'finalized', finalized_at = now() where id = $1", [id]);
+        await bind(c2);
+        const second = c2.query("update reports set status = 'generating' where id = $1", [id]).then(
+          () => "succeeded" as const,
+          (e: unknown) => pgCode(e) ?? "failed",
+        );
+        await new Promise((r) => setTimeout(r, 1000));
+        await c1.query("commit");
+        expect(await second).toBe(RESTRICT_VIOLATION);
+      } finally {
+        await c1.query("rollback").catch(() => {});
+        await c2.query("rollback").catch(() => {});
+        c1.release();
+        c2.release();
+      }
+      expect((await row(id)).status).toBe("finalized");
     });
   });
 

@@ -490,7 +490,7 @@ describe.skipIf(!ENABLED)("section generation through the real stack", () => {
       expect(await versionRows(r.sections[0].id)).toHaveLength(0);
     });
 
-    it("a second section of a report that already generated one is refused until the status rules allow it (generated -> generating does not exist)", async () => {
+    it("a second section of a report that already generated one is refused by the claim (it takes draft or error reports only); the database allows generated -> generating since 0017, and regenerate-section will use it", async () => {
       const r = await mkReport(S, S.c1.id);
       expect((await gen(S.owner, r.reportId, r.sections[0].id)).status).toBe(200);
       outbound.length = 0;
