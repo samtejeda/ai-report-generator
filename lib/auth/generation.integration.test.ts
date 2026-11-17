@@ -703,8 +703,8 @@ describe.skipIf(!ENABLED)("section generation through the real stack", () => {
     it("a refused request (404, 409, admin 403) does not use up the person's quota", async () => {
       const P = await makePractice("quota");
       const before = (await startRows(P.orgId)).length;
-      const r = await mkReport(P, P.c1.id, "generated");
-      await gen(P.owner, r.reportId, r.sections[0].id); // 409
+      const r = await mkReport(P, P.c1.id, "finalized");
+      await gen(P.owner, r.reportId, r.sections[0].id); // 409 (a generated report is not refused since 0017)
       await gen(P.owner, crypto.randomUUID(), crypto.randomUUID()); // 404
       await gen(P.assoc2, r.reportId, r.sections[0].id); // 404 (not assigned)
       await gen(P.admin, r.reportId, r.sections[0].id); // 403
