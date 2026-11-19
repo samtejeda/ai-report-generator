@@ -90,7 +90,10 @@ jobs:
       github.event_name == 'push' ||
       (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 40 min: the suites run one after another against one database and a full run now takes
+    # 18 to 25 min (PR #109 was cancelled at 25m14s with ten suites passed). Past about 30 min
+    # again, split the suites into parallel jobs (needs its own plan).
+    timeout-minutes: 40
     permissions:
       contents: read
     # One run at a time: the suites share one database. Never cancel one mid-run.
