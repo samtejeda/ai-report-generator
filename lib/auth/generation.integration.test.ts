@@ -468,7 +468,7 @@ describe.skipIf(!ENABLED)("section generation through the real stack", () => {
       const text = JSON.stringify(rows);
       for (const needle of ["Zed leak canary", ANSWER, "ts.net", "stub-box", STUB_PROMPT, "Synthetic Client", "Reason for Referral"]) expect(text, needle).not.toContain(needle);
       for (const row of rows.filter((x) => x.action.startsWith("report.generat"))) {
-        expect(Object.keys(row.metadata as object).every((k) => ["role", "mode", "model", "input_tokens", "output_tokens", "latency_ms", "reason"].includes(k)), row.action).toBe(true);
+        expect(Object.keys(row.metadata as object).every((k) => ["role", "mode", "model", "input_tokens", "output_tokens", "latency_ms", "reason", "from_status"].includes(k)), row.action).toBe(true);
       }
     });
   });
@@ -480,22 +480,25 @@ describe.skipIf(!ENABLED)("section generation through the real stack", () => {
       S = await makePractice("s", { lean: true });
     });
 
-    it.each(["generated", "finalized"] as const)("a %s report: 409, nothing sent, nothing changes", async (status) => {
-      const r = await mkReport(S, S.c1.id, status);
+    it("a finalized report: 409, nothing sent, nothing changes", async () => {
+      const r = await mkReport(S, S.c1.id, "finalized");
       const res = await gen(S.owner, r.reportId, r.sections[0].id);
       expect(res.status).toBe(409);
       expect(res.json.error?.code).toBe("conflict");
       expect(outbound).toHaveLength(0);
-      expect((await reportRow(r.reportId)).status).toBe(status);
+      expect((await reportRow(r.reportId)).status).toBe("finalized");
       expect(await versionRows(r.sections[0].id)).toHaveLength(0);
     });
 
-    it("a second section of a report that already generated one is refused by the claim (it takes draft or error reports only); the database allows generated -> generating since 0017, and regenerate-section will use it", async () => {
+    it("a second section of a report that already generated one is generated too, since 0017 (regenerate-section; the rest is in regenerate.integration.test.ts)", async () => {
       const r = await mkReport(S, S.c1.id);
       expect((await gen(S.owner, r.reportId, r.sections[0].id)).status).toBe(200);
       outbound.length = 0;
-      expect((await gen(S.owner, r.reportId, r.sections[1].id)).status).toBe(409);
-      expect(outbound).toHaveLength(0);
+      const second = await gen(S.owner, r.reportId, r.sections[1].id);
+      expect(second.status).toBe(200);
+      expect(outbound).toHaveLength(1);
+      expect((await reportRow(r.reportId)).status).toBe("generated");
+      expect(await versionRows(r.sections[1].id)).toHaveLength(1);
     });
 
     it("a section that already has text is never replaced", async () => {
@@ -700,8 +703,8 @@ describe.skipIf(!ENABLED)("section generation through the real stack", () => {
     it("a refused request (404, 409, admin 403) does not use up the person's quota", async () => {
       const P = await makePractice("quota");
       const before = (await startRows(P.orgId)).length;
-      const r = await mkReport(P, P.c1.id, "generated");
-      await gen(P.owner, r.reportId, r.sections[0].id); // 409
+      const r = await mkReport(P, P.c1.id, "finalized");
+      await gen(P.owner, r.reportId, r.sections[0].id); // 409 (a generated report is not refused since 0017)
       await gen(P.owner, crypto.randomUUID(), crypto.randomUUID()); // 404
       await gen(P.assoc2, r.reportId, r.sections[0].id); // 404 (not assigned)
       await gen(P.admin, r.reportId, r.sections[0].id); // 403

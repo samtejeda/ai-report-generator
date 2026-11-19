@@ -207,6 +207,12 @@ jobs:
           TEST_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
         run: npx vitest run lib/auth/pipeline.integration.test.ts
 
+      - name: Integration tests (regenerate a section)
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
+        env:
+          TEST_DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
+        run: npx vitest run lib/auth/regenerate.integration.test.ts
+
       - name: Integration tests (report state check)
         if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
         env:

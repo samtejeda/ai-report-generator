@@ -270,7 +270,7 @@ describe.skipIf(!ENABLED)("real-mode section generation (three passes) through t
         resourceType: "report_version",
         metadata: { role: "associate", mode: "real", model: "qwen3:8b", input_tokens: 300, output_tokens: 60, latency_ms: expect.any(Number) },
       });
-      expect(Object.keys(done.metadata as object).sort()).toEqual(["input_tokens", "latency_ms", "mode", "model", "output_tokens", "role"]);
+      expect(Object.keys(done.metadata as object).sort()).toEqual(["from_status", "input_tokens", "latency_ms", "mode", "model", "output_tokens", "role"]);
       expectClean("audit log", JSON.stringify(await allAudit(P.orgId)));
       expectClean("llm_metadata", JSON.stringify(version.llmMetadata));
       expectClean("console", consoleOut.join("\n"));
@@ -378,7 +378,7 @@ describe.skipIf(!ENABLED)("real-mode section generation (three passes) through t
       script(filterPlan(THIN));
       const res = await gen(P.owner, r.reportId, r.sections[0].id);
       expect(res.status).toBe(200);
-      expect(res.json).toEqual({ data: { outcome: "needs_confirmation", reportStatus: "draft", missing: ["observations", "quotes"], sensitive: true } });
+      expect(res.json).toEqual({ data: { outcome: "needs_confirmation", reason: "thin_notes", reportStatus: "draft", missing: ["observations", "quotes"], sensitive: true } });
       expect(outbound).toHaveLength(1);
       expect(outbound[0].model).toBe("qwen3:1.7b");
       for (const section of r.sections) expect(await versionRows(section.id)).toHaveLength(0);
@@ -418,7 +418,7 @@ describe.skipIf(!ENABLED)("real-mode section generation (three passes) through t
       const r = await mkReport(P, { status: "error" });
       script(filterPlan({ sufficient: false, missing_fields: [], sensitive_content_detected: false }));
       const res = await gen(P.owner, r.reportId, r.sections[0].id);
-      expect(res.json).toEqual({ data: { outcome: "needs_confirmation", reportStatus: "error", missing: [], sensitive: false } });
+      expect(res.json).toEqual({ data: { outcome: "needs_confirmation", reason: "thin_notes", reportStatus: "error", missing: [], sensitive: false } });
       expect((await reportRow(r.reportId)).status).toBe("error");
     });
 
@@ -709,13 +709,12 @@ describe.skipIf(!ENABLED)("real-mode section generation (three passes) through t
       }
     });
 
-    it("only an empty prose section of a draft or error report: a section with text, a structured section, a generated, a generating and a finalized report are all 409 with no call", async () => {
+    it("a section with text on a draft report, a structured section, a generating and a finalized report are all 409 with no call (a generated report is regenerate-section's, tested in regenerate.integration.test.ts)", async () => {
       const withText = await mkReport(A);
       await h.owner.insert(schema.reportVersions).values({ organizationId: A.orgId, reportId: withText.reportId, sectionId: withText.sections[0].id, versionNumber: 1, editType: "human_edit", content: { text: "A person wrote this" }, createdByUserId: A.owner.userId });
       const cases: [string, Awaited<ReturnType<typeof mkReport>>, string][] = [
         ["a section that already has text", withText, "draft"],
         ["a structured section", await mkReport(A, { sectionType: "structured" }), "draft"],
-        ["a generated report (a second section cannot be generated until regenerate-section exists)", await mkReport(A, { status: "generated" }), "generated"],
         ["a report that is generating", await mkReport(A, { status: "generating" }), "generating"],
         ["a finalized report", await mkReport(A, { status: "finalized" }), "finalized"],
       ];

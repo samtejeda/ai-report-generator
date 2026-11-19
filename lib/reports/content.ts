@@ -28,13 +28,16 @@ export const generatedTextSchema = z
   .max(MAX_SECTION_TEXT)
   .refine((t) => !CONTROL.test(t));
 
+/** The version of a section the person was looking at (0 for a section nobody has written yet). */
+export const baseVersionSchema = z.number().int().min(0).max(1_000_000);
+
 export const sectionEditBody = z.strictObject({
   text: z
     .string()
     .max(MAX_SECTION_TEXT)
     .refine((t) => !CONTROL.test(t)),
   /** The version the editor was looking at; 0 for a section nobody has written yet. */
-  baseVersion: z.number().int().min(0).max(1_000_000),
+  baseVersion: baseVersionSchema,
 });
 
 export function parseProseContent(value: unknown): ProseContent | null {

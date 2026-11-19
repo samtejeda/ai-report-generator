@@ -193,3 +193,27 @@ describe("real-mode generation vocabulary (flags, missing, generation_warned)", 
   });
 });
 
+
+describe("regenerate vocabulary (report.regenerated, from_status)", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+
+  it("report.regenerated is on the list and carries ids, role, mode, a model tag, counts and the earlier status", () => {
+    expect((AUDIT_ACTIONS as readonly string[]).includes("report.regenerated")).toBe(true);
+    const row = buildAuditRow({
+      action: "report.regenerated",
+      resourceType: "report_version",
+      resourceId: id,
+      metadata: { role: "owner", mode: "real", model: "qwen3:8b", latency_ms: 900, input_tokens: 10, output_tokens: 5, flags: "insufficient_input", from_status: "generated" },
+    });
+    expect(row.metadata.from_status).toBe("generated");
+  });
+
+  it("from_status accepts only draft, error and generated; anything else, free text included, is refused", () => {
+    for (const ok of ["draft", "error", "generated"]) {
+      expect(buildAuditRow({ action: "report.generation_started", resourceType: "report_generation", resourceId: id, metadata: { from_status: ok } }).metadata.from_status).toBe(ok);
+    }
+    for (const bad of ["generating", "finalized", "", "Generated", "generated,draft", "free text about a child", 1, true]) {
+      expect(() => buildAuditRow({ action: "report.generation_failed", resourceType: "report", resourceId: id, metadata: { reason: "stale", from_status: bad } }), String(bad)).toThrow(/from_status/);
+    }
+  });
+});

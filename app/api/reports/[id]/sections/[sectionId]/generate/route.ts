@@ -3,6 +3,7 @@ import { readJsonBody } from "@/lib/api/body";
 import { jsonError, jsonOk } from "@/lib/api/respond";
 import { guardedRoute } from "@/lib/auth/guard";
 import { getEnv } from "@/lib/env";
+import { baseVersionSchema } from "@/lib/reports/content";
 import { failureStatus, type GenerationFailure } from "@/lib/reports/generation";
 import { generateSection } from "@/lib/reports/generate-section";
 import { generateSectionWithPipeline } from "@/lib/reports/generate-pipeline";
@@ -14,10 +15,14 @@ import { MAX_NOTES_CHARS } from "@/lib/reports/generation-limits";
 export const maxDuration = 300;
 
 const params = z.object({ id: z.uuid(), sectionId: z.uuid() });
-const noBody = z.strictObject({});
+// Both modes: `baseVersion` is the version of the section the person saw (default 0, an empty section), and
+// `replaceEdited: true` says "yes, replace the text a person wrote". Stub: nothing else is accepted.
+const stubBody = z.strictObject({ baseVersion: baseVersionSchema.optional(), replaceEdited: z.boolean().optional() });
+// The stub's body is two small fields; anything longer is refused before it is parsed.
+const MAX_STUB_BODY_CHARS = 128;
 // Real mode: the psychologist's session notes travel in the request (never stored) and, when the first call
-// answered `needs_confirmation`, the same call is made again with `confirm: true`. Nothing else is accepted.
-const realBody = z.strictObject({
+// answered `needs_confirmation` for thin notes, the same call is made again with `confirm: true`.
+const realBody = stubBody.extend({
   notes: z.string().max(MAX_NOTES_CHARS).refine((n) => n.trim().length > 0),
   confirm: z.boolean().optional(),
 });
@@ -50,10 +55,15 @@ export const POST = guardedRoute<{ id: string; sectionId: string }>({
       const body = await readJsonBody(request, MAX_REAL_BODY_CHARS);
       const parsed = body.ok ? realBody.safeParse(body.value) : null;
       if (!parsed?.success) return jsonError("validation_failed");
-      const outcome = await generateSectionWithPipeline(session, { reportId: ids.data.id, sectionId: ids.data.sectionId }, { notes: parsed.data.notes, confirm: parsed.data.confirm === true });
+      const outcome = await generateSectionWithPipeline(
+        session,
+        { reportId: ids.data.id, sectionId: ids.data.sectionId },
+        { notes: parsed.data.notes, confirm: parsed.data.confirm === true, baseVersion: parsed.data.baseVersion ?? 0, replaceEdited: parsed.data.replaceEdited === true },
+      );
       if (outcome.ok) {
         if (outcome.outcome === "needs_confirmation") {
-          return jsonOk({ data: { outcome: "needs_confirmation", reportStatus: outcome.reportStatus, missing: outcome.missing, sensitive: outcome.sensitive } });
+          if (outcome.reason === "edited_text") return jsonOk({ data: { outcome: "needs_confirmation", reason: "edited_text", reportStatus: outcome.reportStatus } });
+          return jsonOk({ data: { outcome: "needs_confirmation", reason: "thin_notes", reportStatus: outcome.reportStatus, missing: outcome.missing, sensitive: outcome.sensitive } });
         }
         return jsonOk({ data: { outcome: "generated", reportStatus: "generated", section: outcome.section, flags: outcome.flags } });
       }
@@ -71,21 +81,26 @@ export const POST = guardedRoute<{ id: string; sectionId: string }>({
       }
     }
 
-    // Stub mode: nothing in a body is used; an empty one or `{}` is fine, anything else is refused.
+    // Stub mode: no body is fine (a first generation of an empty section); otherwise only the two fields above.
     const text = await request.text();
+    let stub: z.infer<typeof stubBody> = {};
     if (text.length > 0) {
       let value: unknown;
       try {
-        value = text.length <= 16 ? JSON.parse(text) : null;
+        value = text.length <= MAX_STUB_BODY_CHARS ? JSON.parse(text) : null;
       } catch {
         value = null;
       }
-      if (!noBody.safeParse(value).success) return jsonError("validation_failed");
+      const parsed = stubBody.safeParse(value);
+      if (!parsed.success) return jsonError("validation_failed");
+      stub = parsed.data;
     }
 
-    const result = await generateSection(session, { reportId: ids.data.id, sectionId: ids.data.sectionId });
+    const result = await generateSection(session, { reportId: ids.data.id, sectionId: ids.data.sectionId, baseVersion: stub.baseVersion ?? 0, replaceEdited: stub.replaceEdited === true });
     if (result.ok) return jsonOk({ data: { reportStatus: "generated", section: result.section } });
     switch (result.kind) {
+      case "needs_confirmation":
+        return jsonOk({ data: { outcome: "needs_confirmation", reason: "edited_text", reportStatus: result.reportStatus } });
       case "not_found":
         return jsonError("not_found");
       case "conflict":

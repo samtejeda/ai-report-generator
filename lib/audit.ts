@@ -74,6 +74,9 @@ export const AUDIT_ACTIONS = [
   // confirmed, so nothing was generated and the report is untouched. Report id, role, mode, model tag,
   // latency and the closed list of missing field categories; never the notes or any model word.
   "report.generation_warned",
+  // A section that already had text got a new AI version above it (feat/regenerate-section). Version id,
+  // role, mode, model tag, counts, latency and flags; never the text. A new empty section stays `report.generated`.
+  "report.regenerated",
   // Export (feat/report-export-docx). The report id, the caller's role and the file format from a closed
   // list; never the document, a section, a title, a client name or the file name.
   "report.exported",
@@ -88,7 +91,7 @@ export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
 // `previous_role` is a role name (owner, associate, admin) and nothing else: it cannot carry PHI.
 // `fields` names which client columns a write touched, from the closed list below and nothing else.
-export const AUDIT_METADATA_KEYS = ["reason", "ip", "method", "role", "previous_role", "fields", "mode", "model", "input_tokens", "output_tokens", "latency_ms", "format", "flags", "missing"] as const;
+export const AUDIT_METADATA_KEYS = ["reason", "ip", "method", "role", "previous_role", "fields", "mode", "model", "input_tokens", "output_tokens", "latency_ms", "format", "flags", "missing", "from_status"] as const;
 /** Column names only (never values). A `fields` value outside this list is rejected, so it cannot carry PHI. */
 export const AUDIT_CLIENT_FIELDS = ["display_name", "date_of_birth", "grade_level", "external_id"] as const;
 /** Why a generation failed: a code, never text from the model or the transport. */
@@ -101,6 +104,11 @@ export const AUDIT_GENERATION_FAILURES = ["unreachable", "timeout", "bad_respons
  */
 export const AUDIT_SECTION_FLAGS = ["insufficient_input", "sensitive_content_detected", "low_confidence_interpretation"] as const;
 export const AUDIT_MISSING_FIELDS = ["observations", "test_scores", "quotes", "family_context"] as const;
+/**
+ * The status a report was in when a generation claimed it (a record only; `from_status` is one of these and
+ * nothing else). `generated` means the run is a regenerate or another section on a finished report.
+ */
+export const AUDIT_GENERATION_FROM_STATUSES = ["draft", "error", "generated"] as const;
 /** The file formats an export can produce; a `format` value outside this list is rejected. PDF joins when it is built. */
 export const AUDIT_EXPORT_FORMATS = ["docx"] as const;
 /** Why an invitation was not used or sent: a code from a closed list. `.refused` allows only the first. */
@@ -143,6 +151,7 @@ export function buildAuditRow(event: AuditEvent) {
         throw new Error(`audit metadata value for ${key} is not a known name list`);
       }
     }
+    if (key === "from_status" && !(AUDIT_GENERATION_FROM_STATUSES as readonly unknown[]).includes(value)) throw new Error("audit metadata value for from_status is not a known report status");
     if (key === "format" && !(AUDIT_EXPORT_FORMATS as readonly unknown[]).includes(value)) throw new Error("audit metadata value for format is not a known export format");
     if (key === "model" && !(kind === "string" && MODEL_TAG.test(value as string))) throw new Error("audit metadata value for model is not a model tag");
     if ((key === "input_tokens" || key === "output_tokens" || key === "latency_ms") && !(kind === "number" && Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 1e9)) {

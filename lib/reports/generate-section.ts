@@ -26,17 +26,20 @@ import { stubLlmMetadataSchema, type GenerationFailure } from "./generation";
  */
 
 export type GenerateOutcome =
-  | { ok: true; section: { id: string; version: 1; editType: "ai_generated"; text: string } }
+  | { ok: true; section: { id: string; version: number; editType: "ai_generated" | "ai_regenerated_section"; text: string } }
+  /** The current text is a person's own edit and `replaceEdited` was not sent: no model call, nothing written. */
+  | { ok: false; kind: "needs_confirmation"; reportStatus: "generated" }
   | { ok: false; kind: "not_found" | "conflict" | "not_configured" }
   | { ok: false; kind: "rate_limited"; retryAfterSeconds: number }
   | { ok: false; kind: "failed"; reason: GenerationFailure };
 
-export async function generateSection(session: SessionContext, ids: { reportId: string; sectionId: string }): Promise<GenerateOutcome> {
+export async function generateSection(session: SessionContext, ids: { reportId: string; sectionId: string; baseVersion: number; replaceEdited: boolean }): Promise<GenerateOutcome> {
   // This PR is stub only. Any other mode is "not available", decided before the database is touched.
   if (getEnv().INFERENCE_MODE !== "stub") return { ok: false, kind: "not_configured" };
 
   const claim = await claimGeneration(session, ids);
   if (!claim.ok) {
+    if (claim.reason === "edited_text") return { ok: false, kind: "needs_confirmation", reportStatus: claim.reportStatus };
     if (claim.reason === "rate_limited" || claim.reason === "busy") return { ok: false, kind: "rate_limited", retryAfterSeconds: claim.retryAfterSeconds };
     return { ok: false, kind: claim.reason === "not_generatable" ? "conflict" : claim.reason };
   }
@@ -75,7 +78,7 @@ export async function generateSection(session: SessionContext, ids: { reportId: 
     });
     if (!metadata.success) return await fail("invalid_output");
 
-    const finished = await finishGeneration(session, { ...ids, text: text.data, metadata: metadata.data });
+    const finished = await finishGeneration(session, { reportId: ids.reportId, sectionId: ids.sectionId, baseVersion: ids.baseVersion, text: text.data, metadata: metadata.data });
     if (!finished.ok) {
       if (finished.reason === "invalid_output") return await fail("invalid_output");
       // The claim was reclaimed (or access ended) while the model worked: nothing of ours was stored.
@@ -85,19 +88,20 @@ export async function generateSection(session: SessionContext, ids: { reportId: 
     }
 
     await audit(actor, {
-      action: "report.generated",
+      action: finished.editType === "ai_regenerated_section" ? "report.regenerated" : "report.generated",
       resourceType: "report_version",
       resourceId: finished.versionId,
       metadata: {
         role: session.role,
         mode: "stub",
+        from_status: claim.fromStatus,
         model: metadata.data.model,
         latency_ms: metadata.data.latencyMs,
         ...(metadata.data.inputTokens !== null ? { input_tokens: metadata.data.inputTokens } : {}),
         ...(metadata.data.outputTokens !== null ? { output_tokens: metadata.data.outputTokens } : {}),
       },
     });
-    return { ok: true, section: { id: ids.sectionId, version: 1, editType: "ai_generated", text: text.data } };
+    return { ok: true, section: { id: ids.sectionId, version: finished.version, editType: finished.editType, text: text.data } };
   } catch {
     return await fail("internal");
   }
