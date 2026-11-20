@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FRESH_PASSWORD_SECONDS } from "@/lib/auth/config";
 import { adminErrorMessage, needsReauth, REAUTH_MESSAGE, type AdminAction } from "./messages";
 
 const ACTIONS: AdminAction[] = ["change_role", "deactivate", "reactivate", "reset_mfa", "assign", "end_assignment", "set_endpoint", "clear_endpoint", "invite", "resend_invitation", "revoke_invitation"];
@@ -17,6 +18,12 @@ describe("adminErrorMessage", () => {
     expect(needsReauth({ status: 401, code: "reauth_required" })).toBe(false);
     expect(needsReauth(null)).toBe(false);
     expect(adminErrorMessage("reset_mfa", { status: 403, code: "forbidden" })).toMatch(/do not have access/);
+  });
+  it("the old-sign-in message says a fresh sign-in is needed, why, the minutes from the rule, and what to do", () => {
+    expect(REAUTH_MESSAGE).toMatch(/fresh sign-in/);
+    expect(REAUTH_MESSAGE).toContain(`older than ${FRESH_PASSWORD_SECONDS / 60} minutes`);
+    expect(REAUTH_MESSAGE).toMatch(/confirm it is you/);
+    expect(REAUTH_MESSAGE).toMatch(/Sign out, sign in again, then repeat the action/);
   });
   it("every action and status gets a non-empty fixed sentence", () => {
     for (const a of ACTIONS) for (const status of STATUSES) {
