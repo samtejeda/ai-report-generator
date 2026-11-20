@@ -85,6 +85,11 @@ export function generatedResult(realMode: boolean, version: number | null): stri
   return realMode ? `Generated version${n}. Review it before you finalize.` : `Test text added as version${n}.`;
 }
 
+/** Under Save while a run is in flight (the route refuses a save on a generating report). */
+export const SAVE_PAUSED_NOTE = "Saving is paused while the model works.";
+
+export const REVIEW_HEADING = "Review this section";
+
 // Review prompts, from the flags that came with the report read (closed list).
 export const REVIEW_PROMPT: Record<"insufficient_input" | "sensitive_content_detected" | "low_confidence_interpretation", string> = {
   insufficient_input: 'Some details were missing from the notes. Look for "[Please provide]" in this section and fill those in.',

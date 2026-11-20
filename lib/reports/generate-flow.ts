@@ -1,5 +1,18 @@
 import type { GenerateAnswer, GenerateBody, MissingCategory, ReviewFlag } from "@/lib/reports/generate-call";
-import { failureMayHaveChangedState, generateErrorMessage } from "@/lib/reports/generate-messages";
+import { GO_BACK_BUTTON } from "@/lib/reports/finalize-check";
+import {
+  failureMayHaveChangedState,
+  GENERATE_BLOCKED_HEADING,
+  GENERATE_GO_ANYWAY_BUTTON,
+  GENERATE_UNSAVED_HEADING,
+  generateErrorMessage,
+  REPLACE_GO_BUTTON,
+  REPLACE_HEADING,
+  REPLACE_KEEP_BUTTON,
+  THIN_ADD_NOTES_BUTTON,
+  THIN_GO_AHEAD_BUTTON,
+  THIN_HEADING,
+} from "@/lib/reports/generate-messages";
 import { unsavedTitles } from "@/lib/reports/unsaved";
 import type { UnsavedEntry } from "@/lib/ui/unsaved-store";
 
@@ -15,6 +28,9 @@ import type { UnsavedEntry } from "@/lib/ui/unsaved-store";
  *   - `withThinConfirmed` after "Go ahead anyway".
  * A run is never reused for the next press, so a confirmation is never sticky.
  */
+
+/** The id of the one notes box, so "Add more notes" can put the cursor in it. */
+export const NOTES_BOX_ID = "generate-notes-box";
 
 export type Run = { replaceEdited: boolean; confirm: boolean };
 
@@ -75,5 +91,32 @@ export function nextStep(answer: GenerateAnswer, realMode: boolean): Step {
       return { step: "ask_thin", missing: answer.missing, sensitive: answer.sensitive };
     case "failed":
       return { step: "error", message: generateErrorMessage(answer.failure, answer.retryAfterSeconds, realMode), refresh: failureMayHaveChangedState(answer.failure) };
+  }
+}
+
+/**
+ * What a section's dialog is asking. The first two come from the server's answer (nothing has been
+ * generated yet); the other two come from the unsaved store before anything is sent. `safe` is the
+ * default button (focus and Esc); `other` is the second choice, absent when there is only one way
+ * forward ("blocked").
+ */
+export type Question =
+  | { kind: "thin"; run: Run; missing: MissingCategory[]; sensitive: boolean }
+  | { kind: "replace"; run: Run }
+  | { kind: "warn"; titles: string[]; firstKey: string }
+  | { kind: "blocked"; titles: string[]; firstKey: string };
+
+export function questionLabels(q: Question | null): { heading: string; safe: string; other: string | undefined } {
+  switch (q?.kind) {
+    case "thin":
+      return { heading: THIN_HEADING, safe: THIN_ADD_NOTES_BUTTON, other: THIN_GO_AHEAD_BUTTON };
+    case "replace":
+      return { heading: REPLACE_HEADING, safe: REPLACE_KEEP_BUTTON, other: REPLACE_GO_BUTTON };
+    case "warn":
+      return { heading: GENERATE_UNSAVED_HEADING, safe: GO_BACK_BUTTON, other: GENERATE_GO_ANYWAY_BUTTON };
+    case "blocked":
+      return { heading: GENERATE_BLOCKED_HEADING, safe: GO_BACK_BUTTON, other: undefined };
+    default:
+      return { heading: "", safe: GO_BACK_BUTTON, other: undefined };
   }
 }

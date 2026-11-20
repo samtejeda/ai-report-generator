@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { FinalizeBlockedDialog } from "@/components/reports/finalize-blocked-dialog";
+import { useGenerationRunning } from "@/components/reports/generation-context";
 import { checkBeforeFinalize } from "@/lib/reports/finalize-check";
 import { unsavedStore } from "@/lib/ui/unsaved-store";
 import { useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
@@ -13,6 +14,8 @@ export function FinalizeButton({ reportId }: { reportId: string }) {
   const router = useRouter();
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  // The route refuses a finalize while a generation is running; do not offer it.
+  const generationRunning = useGenerationRunning();
   const [blocked, setBlocked] = useState<{ titles: string[]; firstKey: string } | null>(null);
   // The popup is a message, not a draft: let go of it when Next hides the page.
   useResetWhenHidden(() => {
@@ -37,7 +40,7 @@ export function FinalizeButton({ reportId }: { reportId: string }) {
 
   return (
     <div className="flex flex-col gap-2 text-sm">
-      <Button type="button" onClick={onClick} disabled={pending}>
+      <Button type="button" onClick={onClick} disabled={pending || generationRunning}>
         Finalize report
       </Button>
       {message ? <p role="alert">{message}</p> : null}
