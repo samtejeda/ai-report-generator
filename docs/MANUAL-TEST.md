@@ -106,7 +106,7 @@ When Tailscale is installed and `tailscale serve` exposes Ollama as an `https://
 | # | Do | Expect |
 |---|---|---|
 | C2.1 | Generate on an empty section | The section fills with the test model's placeholder text, marked as the test model's; the report becomes `generated` |
-| C2.2 | Look at the generated report | Sections with text offer **Regenerate test text**; an empty section still offers **Generate test text** (regenerate-section and the generate screen are built; see part I) |
+| C2.2 | Look at the generated report | Sections with text offer **Regenerate test text**; an empty section still offers **Generate test text** (regenerate-section and the generate screen are merged; see part I) |
 | C2.3 | Edit the generated text and save | New version; the "test model's text" marker goes away |
 | C2.4 | Check the history of that section | Shows the generated version first, then your edit |
 | C2.5 | Press Finalize | The report becomes `finalized`; every box is read only; there is no way back |
@@ -238,7 +238,7 @@ Sending real mail is not built (Resend, decisions row 8): the link only appears 
 | H5 | Press the button 21 times in 10 minutes | A short wait message, no raw error |
 | H6 | Use the button at 375 px and with the keyboard only | Reachable and readable |
 
-## I. Generate and Regenerate (feat/generate-ui; not yet clicked through in a browser)
+## I. Generate and Regenerate (merged #111; not yet clicked through in a browser)
 
 Stub mode is the dev default (`INFERENCE_MODE=stub`): no notes box, "test text" wording. Real mode needs `INFERENCE_MODE=real`, the practice's endpoint and a real methodology version (Phase B), so I9 to I18 are **blocked** until then. I1 to I3 can run now.
 
