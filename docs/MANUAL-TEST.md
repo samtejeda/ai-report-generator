@@ -19,6 +19,7 @@ Mark each step Pass, Fail or Skip in the results table at the end. For a Fail, w
 | F. Word export, by address (no button yet) | A report with some saved text | **Can run now** (#85 is merged); the draft case only, since a finalized report needs C2 |
 | G. Invitation screens | Merged (#90, 2026-11-09) | **Can run now.** The builder's short click-through is in B ("Invite an associate by the screens"); G is the fuller list |
 | H. Export button | Merged (#91, 2026-11-09) | **Can run now** (a report with some saved text; the draft case only until C2 works). Not yet clicked through in a browser; the builder's rows D9 to D12 and B18 cover the same ground in short form |
+| I. Generate and Regenerate | Merged (feat/generate-ui) | **I1 to I3 can run now.** I4 to I8 need C2 (a working endpoint, Tailscale). I9 to I18 need real mode (endpoint plus the practice owner's methodology, Phase B) |
 | E. A second practice cannot see the first | A second practice made by `bootstrap-owner.mjs` on `dev` | Optional; a database write on the shared `dev` database, so only with Sam's go-ahead (dry run first, host checked) |
 
 Roles are still covered in CI at the route level (`authz.integration.test.ts`, 31 tests, and the admin and client suites), so part B is about the screens, not about whether access control holds.
@@ -105,7 +106,7 @@ When Tailscale is installed and `tailscale serve` exposes Ollama as an `https://
 | # | Do | Expect |
 |---|---|---|
 | C2.1 | Generate on an empty section | The section fills with the test model's placeholder text, marked as the test model's; the report becomes `generated` |
-| C2.2 | Try Generate on the same section again, and on another empty section | The button is not offered (a generated report cannot generate again until regenerate-section is built) |
+| C2.2 | Look at the generated report | Sections with text offer **Regenerate test text**; an empty section still offers **Generate test text** (regenerate-section and the generate screen are built; see part I) |
 | C2.3 | Edit the generated text and save | New version; the "test model's text" marker goes away |
 | C2.4 | Check the history of that section | Shows the generated version first, then your edit |
 | C2.5 | Press Finalize | The report becomes `finalized`; every box is read only; there is no way back |
@@ -237,6 +238,31 @@ Sending real mail is not built (Resend, decisions row 8): the link only appears 
 | H5 | Press the button 21 times in 10 minutes | A short wait message, no raw error |
 | H6 | Use the button at 375 px and with the keyboard only | Reachable and readable |
 
+## I. Generate and Regenerate (feat/generate-ui; not yet clicked through in a browser)
+
+Stub mode is the dev default (`INFERENCE_MODE=stub`): no notes box, "test text" wording. Real mode needs `INFERENCE_MODE=real`, the practice's endpoint and a real methodology version (Phase B), so I9 to I18 are **blocked** until then. I1 to I3 can run now.
+
+| # | Do | Expect |
+|---|---|---|
+| I1 | Open a draft report as the owner (stub mode) | Each empty section has **Generate test text** and a note that it is a test model's placeholder. No "Session notes" box |
+| I2 | Press it with no endpoint set | One sentence: text generation is not set up for this practice yet, nothing was sent. The report stays `draft`. No raw server text |
+| I3 | Open the report as an associate who is not assigned to the client | The 404 page (no controls, no client name) |
+| I4 | (needs C2: a working endpoint) After a generation the report is `generated` | Sections with text offer **Regenerate test text**; empty ones still offer **Generate test text** |
+| I5 | Edit a generated section and save, then press Regenerate on it | A dialog "Replace your own text?" says your text will be replaced by a new version and stays in the history. **Keep my text** has focus and Esc does the same; **Replace with a new version** makes a new version. Check the history: your edit is still there |
+| I6 | Type in section A without saving, press Regenerate on section B | A red list names A. **Go back and save** has focus (Esc the same, cursor to A); **Generate anyway** goes ahead and what you typed is still in A |
+| I7 | Type in the section you are about to regenerate, without saving, and press Regenerate | The red list with one button, **Go back and save**; nothing is sent |
+| I8 | While a run is going | Save, Finalize and the other Generate buttons are disabled; the line under Save says saving is paused; a status line says it can take a few minutes; there is no progress bar |
+| I9 | (real mode) Open a draft report | A **Session notes** box above the sections with "Not saved. Cleared when you leave or reload this page." The Generate buttons are disabled with "Add your session notes above first." until you type |
+| I10 | (real mode) Type notes, switch to another browser tab, copy something, come back | The notes are still there (switching tabs must not clear them) |
+| I11 | (real mode) Type notes, open the client page, come back | The notes are gone (leaving the page clears them) |
+| I12 | (real mode) Type notes, reload | The notes are gone and nothing about them is in the address bar. Press **Clear notes** after typing: the box empties |
+| I13 | (real mode) Generate from very short notes | **Before** anything is written, a dialog says what is missing (observations, test scores, quotes, family context) and that the section will contain "[Please provide]" where the notes do not support it. **Add more notes** has focus (Esc the same, cursor in the notes box); **Go ahead anyway** writes the section |
+| I14 | (real mode) Generate a section that gets review flags | A "Review this section" note with one plain sentence per flag. It is still there after a reload and is gone after you save the section |
+| I15 | (real mode) Hit a limit, or stop the model | One fixed sentence (a wait time for the limit, "nothing was saved" for a model that did not answer), and your notes are still in the box |
+| I16 | (real mode) Close the page during a run, reopen after about 6 minutes | The report is back to its earlier status on its own; the page shows the reload note while it is still generating |
+| I17 | (real mode) Two people: one saves a section while the other regenerates it | The second gets the fixed "changed while you were working" sentence, the page refreshes, nothing is overwritten |
+| I18 | All of the above at 375 px and with the keyboard only | Reachable and readable; every dialog is closable with Esc |
+
 ## Results
 
 First run (owner only, 2026-10-28 to 2026-10-30): see [MANUAL-TEST-RESULTS-2026-10-28.md](MANUAL-TEST-RESULTS-2026-10-28.md). The table below is for the next run; fill it in then.
@@ -256,5 +282,6 @@ First run (owner only, 2026-10-28 to 2026-10-30): see [MANUAL-TEST-RESULTS-2026-
 | F1 to F12 | | |
 | G1 to G13 | | |
 | H1 to H6 | | |
+| I1 to I18 | | |
 
 After the run, hand this table to the supervising session. It reads the audit log from the database (read-only) and checks that each action above left the expected `client.*`, `report.*`, `auth.*` and `authz.denied` rows, and none of them contains client text.

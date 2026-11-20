@@ -3,6 +3,8 @@ import { GuardedLink } from "@/components/unsaved/guarded-link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { DownloadButton } from "@/components/reports/download-button";
+import { GenerateNotesBox } from "@/components/reports/generate-notes-box";
+import { GenerationProvider } from "@/components/reports/generation-context";
 import { FinalizeButton } from "@/components/reports/finalize-button";
 import { LocalTime } from "@/components/reports/local-time";
 import { UnsavedSummary } from "@/components/unsaved/unsaved-summary";
@@ -11,9 +13,10 @@ import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/guard";
 import { REPORT_WRITE_ROLES } from "@/lib/auth/permissions";
 import { getReportDetail } from "@/lib/db/report-access";
+import { getEnv } from "@/lib/env";
 import { canOfferExport } from "@/lib/reports/export-download";
-import { canOfferGenerate, isTestModelText } from "@/lib/reports/generate-control";
-import { REPORT_ERROR_NOTE, REPORT_GENERATING_NOTE } from "@/lib/reports/generate-messages";
+import { generateOffer, isModelText } from "@/lib/reports/generate-control";
+import { reportErrorNote, reportGeneratingNote } from "@/lib/reports/generate-messages";
 import { isEditable } from "@/lib/reports/status";
 
 export const metadata: Metadata = { title: "Report", robots: { index: false } };
@@ -32,6 +35,36 @@ async function ReportDetail({ params }: { params: Promise<{ id: string }> }) {
   );
   const canWrite = (REPORT_WRITE_ROLES as readonly string[]).includes(session.role);
   const editable = canWrite && isEditable(report.status);
+  // Only a plain boolean reaches the browser: which wording to use. Never the endpoint or a model name.
+  const realMode = getEnv().INFERENCE_MODE === "real";
+  const offers = report.sections.map((s) => generateOffer({ canWrite, status: report.status, type: s.type, version: s.version }));
+  const anyOffer = offers.some((o) => o !== null);
+  const body = (
+    <>
+      {realMode && anyOffer ? <GenerateNotesBox /> : null}
+      {report.sections.map((s, i) => (
+        <SectionEditor
+          key={s.id}
+          reportId={report.id}
+          sectionId={s.id}
+          title={s.title}
+          position={s.position}
+          initialText={s.text}
+          initialVersion={s.version}
+          editable={editable}
+          offer={offers[i]}
+          realMode={realMode}
+          isModelText={isModelText(s.editType)}
+          flags={s.flags}
+          editType={s.editType}
+          authorName={s.authorName}
+          editedAt={s.editedAt}
+        />
+      ))}
+      {canOfferExport(session.role) ? <DownloadButton reportId={report.id} status={report.status} /> : null}
+      {canWrite && report.status === "generated" ? <FinalizeButton reportId={report.id} /> : null}
+    </>
+  );
   return (
     <>
       <UnsavedSummary />
@@ -44,30 +77,19 @@ async function ReportDetail({ params }: { params: Promise<{ id: string }> }) {
           </>
         ) : null}
       </p>
-      {report.status === "generating" ? <p className="text-sm">{REPORT_GENERATING_NOTE}</p> : null}
-      {report.status === "error" && canWrite ? <p className="text-sm">{REPORT_ERROR_NOTE}</p> : null}
+      {report.status === "generating" ? <p className="text-sm">{reportGeneratingNote(realMode)}</p> : null}
+      {report.status === "error" && canWrite ? <p className="text-sm">{reportErrorNote(realMode)}</p> : null}
       <GuardedLink href={`/clients/${report.clientId}`} className="text-sm underline">
         Back to the client
       </GuardedLink>
-      {report.sections.map((s) => (
-        <SectionEditor
-          key={s.id}
-          reportId={report.id}
-          sectionId={s.id}
-          title={s.title}
-          position={s.position}
-          initialText={s.text}
-          initialVersion={s.version}
-          editable={editable}
-          canGenerate={canOfferGenerate({ canWrite, status: report.status, type: s.type, version: s.version })}
-          isTestText={isTestModelText(s.editType)}
-          editType={s.editType}
-          authorName={s.authorName}
-          editedAt={s.editedAt}
-        />
-      ))}
-      {canOfferExport(session.role) ? <DownloadButton reportId={report.id} status={report.status} /> : null}
-      {canWrite && report.status === "generated" ? <FinalizeButton reportId={report.id} /> : null}
+      {/* The notes and the "a run is in flight" state exist only for a person who can write: an admin's page has no provider and no controls. */}
+      {canWrite ? (
+        <GenerationProvider realMode={realMode} anyOffer={anyOffer}>
+          {body}
+        </GenerationProvider>
+      ) : (
+        body
+      )}
     </>
   );
 }

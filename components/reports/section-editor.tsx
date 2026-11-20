@@ -6,10 +6,13 @@ import { Button } from "@/components/ui/button";
 import { fieldClass } from "@/components/auth/auth-card";
 import { useRegisterUnsaved } from "@/components/unsaved/use-unsaved";
 import { GenerateSectionButton } from "@/components/reports/generate-section-button";
+import { useGenerationRunning } from "@/components/reports/generation-context";
 import { LocalTime } from "@/components/reports/local-time";
+import { SectionReviewNotes } from "@/components/reports/section-review-notes";
 import { SectionConflictNotice } from "@/components/reports/section-conflict-notice"; // REMOVABLE (see use-section-conflict.ts)
 import { useSectionConflict } from "@/components/reports/use-section-conflict"; // REMOVABLE
-import { TEST_TEXT_MARKER } from "@/lib/reports/generate-messages";
+import type { GenerateOffer } from "@/lib/reports/generate-control";
+import { modelTextMarker, SAVE_PAUSED_NOTE } from "@/lib/reports/generate-messages";
 import { isUnsaved, reconcileDraft } from "@/lib/reports/draft";
 import { HISTORY_UNAVAILABLE, SAVE_FAILED, SAVE_INVALID } from "@/lib/reports/save-messages";
 import { saveSectionCall } from "@/lib/reports/save-section-call";
@@ -36,8 +39,10 @@ export function SectionEditor({
   initialText,
   initialVersion,
   editable,
-  canGenerate,
-  isTestText,
+  offer,
+  realMode,
+  isModelText,
+  flags,
   editType,
   authorName,
   editedAt,
@@ -52,9 +57,13 @@ export function SectionEditor({
   initialVersion: number;
   editable: boolean;
   /** Decided on the server (lib/reports/generate-control.ts); the route re-checks it. */
-  canGenerate: boolean;
-  /** The current version is the test model's and nobody has edited it since. */
-  isTestText: boolean;
+  offer: GenerateOffer;
+  /** The practice runs the real model (not the dev stub); wording only, decided on the server. */
+  realMode: boolean;
+  /** The current version is the model's (generated or regenerated) and nobody has edited it since. */
+  isModelText: boolean;
+  /** Review prompts attached to the current version (closed list); empty once a person saves. */
+  flags: readonly string[];
   /** Who wrote the current version and when (null for a section nobody has written). Display name only. */
   editType: string | null;
   authorName: string | null;
@@ -62,6 +71,8 @@ export function SectionEditor({
 }) {
   const router = useRouter();
   const unsavedLabelId = useId();
+  // A generation is in flight on this page: the route refuses a save while the report is generating.
+  const generationRunning = useGenerationRunning();
   const boxRef = useRef<HTMLTextAreaElement>(null);
 
   // The draft in the box, and the version and text it was written against.
@@ -160,7 +171,8 @@ export function SectionEditor({
           </span>
         ) : null}
       </div>
-      {isTestText ? <p>{TEST_TEXT_MARKER}</p> : null}
+      {isModelText ? <p>{modelTextMarker(realMode)}</p> : null}
+      {editable && isModelText ? <SectionReviewNotes flags={flags} /> : null}
       {editable ? (
         <form onSubmit={onSubmit} className="flex flex-col gap-2">
           <textarea
@@ -179,20 +191,21 @@ export function SectionEditor({
           {conflictOpen && conflict.theirs ? (
             <SectionConflictNotice theirs={conflict.theirs} showTheirs={conflict.showTheirs} busy={pending} onToggle={conflict.toggleTheirs} onSaveMine={conflict.saveMine} onUseTheirs={conflict.useTheirs} />
           ) : (
-            <Button type="submit" disabled={pending}>
+            <Button type="submit" disabled={pending || generationRunning}>
               {pending ? "Saving…" : "Save section"}
             </Button>
           )}
+          {generationRunning ? <p>{SAVE_PAUSED_NOTE}</p> : null}
         </form>
       ) : (
         <p className="whitespace-pre-wrap">{initialText || "—"}</p>
       )}
       {editedAt ? (
         <p>
-          {versionAttribution({ editType, authorName })} · <LocalTime iso={editedAt} />
+          {versionAttribution({ editType, authorName }, realMode)} · <LocalTime iso={editedAt} />
         </p>
       ) : null}
-      {editable && canGenerate ? <GenerateSectionButton reportId={reportId} sectionId={sectionId} boxHasText={draft.trim().length > 0} /> : null}
+      {editable && offer ? <GenerateSectionButton reportId={reportId} sectionId={sectionId} offer={offer} version={shownVersion} boxHasText={draft.trim().length > 0} /> : null}
       {message ? <p role="alert">{message}</p> : null}
       {note ? <p role="status">{note}</p> : null}
       {saved ? <p role="status">Saved as version {base.version}.</p> : null}
@@ -203,7 +216,7 @@ export function SectionEditor({
         <ol className="flex flex-col gap-2">
           {history.map((v) => (
             <li key={v.id}>
-              <span className="font-medium">Version {v.version}</span> · {versionAttribution(v)} · <LocalTime iso={v.createdAt} />
+              <span className="font-medium">Version {v.version}</span> · {versionAttribution(v, realMode)} · <LocalTime iso={v.createdAt} />
               <p className="whitespace-pre-wrap">{v.text || "—"}</p>
             </li>
           ))}

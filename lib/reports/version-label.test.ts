@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AUTHOR_UNKNOWN_LABEL, MODEL_TEXT_LABEL, OTHER_EDIT_LABEL, versionAttribution } from "./version-label";
+import { AUTHOR_UNKNOWN_LABEL, MODEL_TEXT_LABEL, MODEL_TEXT_LABEL_REAL, OTHER_EDIT_LABEL, versionAttribution } from "./version-label";
 
 describe("versionAttribution", () => {
   it("a person's edit names the person", () => {
@@ -15,6 +15,10 @@ describe("versionAttribution", () => {
   it.each(["ai_generated", "ai_regenerated_section"])("%s is test model text, with or without a name", (editType) => {
     expect(versionAttribution({ editType, authorName: null })).toBe(MODEL_TEXT_LABEL);
     expect(versionAttribution({ editType, authorName: "Someone" })).toBe(MODEL_TEXT_LABEL);
+  });
+  it.each(["ai_generated", "ai_regenerated_section"])("%s in real mode is not called test text", (editType) => {
+    expect(versionAttribution({ editType, authorName: null }, true)).toBe(MODEL_TEXT_LABEL_REAL);
+    expect(MODEL_TEXT_LABEL_REAL).not.toMatch(/test/i);
   });
   it("an unknown type is a neutral word, never the raw type", () => {
     expect(versionAttribution({ editType: "something_new", authorName: "X" })).toBe(OTHER_EDIT_LABEL);

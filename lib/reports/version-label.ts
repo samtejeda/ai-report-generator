@@ -8,19 +8,21 @@
  */
 
 export const MODEL_TEXT_LABEL = "Test model text";
+/** Real mode: the practice's own model wrote it. */
+export const MODEL_TEXT_LABEL_REAL = "Model text";
 export const AUTHOR_UNKNOWN_LABEL = "Edited by (name not available)";
 export const OTHER_EDIT_LABEL = "Saved";
 
-export function versionAttribution(v: { editType: string | null; authorName: string | null }): string {
+export function versionAttribution(v: { editType: string | null; authorName: string | null }, realMode = false): string {
   switch (v.editType) {
     case "human_edit": {
       const name = v.authorName?.trim();
       return name ? `Edited by ${name}` : AUTHOR_UNKNOWN_LABEL;
     }
-    // The only model today is the dev stub, so both kinds of model text read the same.
+    // Both kinds of model text read the same; the page says whether the model is the dev stub or the real one.
     case "ai_generated":
     case "ai_regenerated_section":
-      return MODEL_TEXT_LABEL;
+      return realMode ? MODEL_TEXT_LABEL_REAL : MODEL_TEXT_LABEL;
     default:
       return OTHER_EDIT_LABEL;
   }

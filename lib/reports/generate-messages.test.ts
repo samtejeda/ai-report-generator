@@ -6,8 +6,18 @@ import {
   GENERATE_NOTE,
   REPORT_ERROR_NOTE,
   REPORT_GENERATING_NOTE,
+  generatedResult,
+  generateButtonLabel,
+  generateNote,
+  generateWorkingStatus,
+  MISSING_LABEL,
+  modelTextMarker,
+  REVIEW_PROMPT,
   TEST_TEXT_MARKER,
+  reportErrorNote,
+  reportGeneratingNote,
 } from "./generate-messages";
+import { GENERATION_LEASE_SECONDS } from "./generation-limits";
 
 const STATUSES = [0, 400, 401, 403, 404, 409, 429, 500, 502, 504];
 
@@ -24,8 +34,8 @@ describe("generateErrorMessage", () => {
     expect(generateErrorMessage({ status: 401, code: "unauthenticated" })).toMatch(/session ended/);
     expect(generateErrorMessage({ status: 403, code: "forbidden" })).toMatch(/do not have access/);
     expect(generateErrorMessage({ status: 404, code: "not_found" })).toMatch(/could not be found/);
-    expect(generateErrorMessage({ status: 409, code: "inference_not_configured" })).toMatch(/not set up for this practice.*owner/);
-    expect(generateErrorMessage({ status: 409, code: "conflict" })).toMatch(/changed, or a run is in progress/);
+    expect(generateErrorMessage({ status: 409, code: "inference_not_configured" })).toMatch(/not set up for this practice yet\. Nothing was sent/);
+    expect(generateErrorMessage({ status: 409, code: "conflict" })).toMatch(/changed while you were working.*page was refreshed/);
     expect(generateErrorMessage({ status: 502, code: "inference_failed" })).toMatch(/did not answer.*Nothing was saved/);
     expect(generateErrorMessage({ status: 504, code: "inference_failed" })).toMatch(/did not answer.*Nothing was saved/);
     expect(generateErrorMessage({ status: 500, code: "internal_error" })).toMatch(/Something went wrong/);
@@ -88,5 +98,52 @@ describe("the labels", () => {
   it("the report-level notes tell a reader to reload, and name no cause beyond the generation", () => {
     expect(REPORT_GENERATING_NOTE).toMatch(/Reload/);
     expect(REPORT_ERROR_NOTE).toMatch(/did not finish/);
+  });
+});
+
+describe("real mode wording", () => {
+  it("stub keeps today's wording; real mode says generate from notes", () => {
+    expect(generateButtonLabel("generate", false)).toBe(GENERATE_BUTTON_LABEL);
+    expect(generateButtonLabel("generate", true)).toBe("Generate from notes");
+    expect(generateButtonLabel("regenerate", true)).toMatch(/Regenerate/);
+    expect(generateButtonLabel("regenerate", false)).toMatch(/Regenerate test text/);
+    expect(generateNote(false)).toBe(GENERATE_NOTE);
+    expect(modelTextMarker(false)).toBe(TEST_TEXT_MARKER);
+    expect(modelTextMarker(true)).not.toMatch(/test model/);
+    expect(reportGeneratingNote(false)).toBe(REPORT_GENERATING_NOTE);
+    expect(reportErrorNote(false)).toBe(REPORT_ERROR_NOTE);
+  });
+
+  it("the working message is honest about minutes, has no percentage, and the generating note names the lease", () => {
+    expect(generateWorkingStatus(true)).toMatch(/few minutes/);
+    expect(generateWorkingStatus(true)).not.toMatch(/\d+\s*%/);
+    expect(reportGeneratingNote(true)).toContain(`${Math.round(GENERATION_LEASE_SECONDS / 60)} minutes`);
+  });
+
+  it("not-configured never sends the person to the inference-endpoint screen (in real mode the missing piece may be the methodology)", () => {
+    for (const real of [false, true]) expect(generateErrorMessage({ status: 409, code: "inference_not_configured" }, null, real)).not.toMatch(/Inference endpoint/i);
+  });
+
+  it("real mode tells the person their notes are still there after a failed call; stub does not mention notes", () => {
+    for (const failure of [null, { status: 502, code: "inference_failed" }, { status: 504, code: "inference_failed" }, { status: 409, code: "inference_not_configured" }])
+      expect(generateErrorMessage(failure, null, true)).toMatch(/notes are still here/);
+    expect(generateErrorMessage({ status: 502, code: "inference_failed" })).not.toMatch(/notes/);
+  });
+
+  it("the result line names the version", () => {
+    expect(generatedResult(true, 3)).toMatch(/version 3/);
+    expect(generatedResult(false, 1)).toMatch(/version 1/);
+    expect(generatedResult(true, null)).not.toMatch(/null|undefined/);
+  });
+
+  it("every flag and every missing category has a sentence, and none repeats a raw name", () => {
+    expect(Object.keys(REVIEW_PROMPT).sort()).toEqual(["insufficient_input", "low_confidence_interpretation", "sensitive_content_detected"]);
+    expect(Object.keys(MISSING_LABEL).sort()).toEqual(["family_context", "observations", "quotes", "test_scores"]);
+    for (const text of [...Object.values(REVIEW_PROMPT), ...Object.values(MISSING_LABEL)]) expect(text).not.toMatch(/_/);
+  });
+
+  it('the placeholder spelling matches the pipeline\'s "[Please provide]"', async () => {
+    const { PLEASE_PROVIDE } = await import("@/lib/ai/pipeline/schemas");
+    expect(REVIEW_PROMPT.insufficient_input).toContain(PLEASE_PROVIDE);
   });
 });
