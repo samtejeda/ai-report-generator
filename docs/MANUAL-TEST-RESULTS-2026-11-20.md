@@ -15,3 +15,5 @@ Environment: main checkout at `1530f20` (after #111), Next 16.4.6, `INFERENCE_MO
 |---|---|---|
 | I1 | Pass | Generate test text on each empty section, test-model note, no notes box |
 | I2 | Pass | "Not set up yet" sentence, report stays draft |
+| H1 (owner), H3, H4 | Pass | Button present; unsaved warning with Go back and save default; DRAFT sentence |
+| F1 to F9 | Pass | File name, DRAFT line and header, text and `[Not yet written]`, no names or properties, edit shows, unsaved text absent, literal characters, bad `format` is a JSON error, signed out goes to `/login` |
