@@ -20,7 +20,7 @@ Environment: main checkout at `1530f20` (after #111), Next 16.4.6, `INFERENCE_MO
 | G5 | Pass (behaviour), UX finding U1 | A used link and a revoked link both show the name and password form (the page never looks the token up), and submitting gives "not valid" and creates nothing. Sam expected the page itself to refuse |
 | G10 | Pass (behaviour), UX finding U1 | Same as G5 for a revoked invitation (revoke worked after a fresh sign-in) |
 | G11 | Observed, finding U2 | Invite and revoke refused with a vague "sign-in more than a few minutes old" message (the rule is 5 minutes from sign-in, by design). Message rewritten in #113 |
-| G1, G3, G4, G6, G7, G9, G13 | Not yet reported | Waiting for Sam |
+| G1, G3, G4, G6, G7, G9, G13 | Pass | Invitation screens, same answer for an existing address, accept form, refusals keep the form, Back shows no token, new associate reaches authenticator setup, resend kills the old link |
 
 ## UX findings
 
