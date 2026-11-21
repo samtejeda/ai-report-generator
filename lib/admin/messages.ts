@@ -1,4 +1,4 @@
-import { INVITATION_LIMITS } from "@/lib/auth/config";
+import { FRESH_PASSWORD_SECONDS, INVITATION_LIMITS } from "@/lib/auth/config";
 import { tooManyAttemptsMessage } from "@/lib/auth/rate-limit-wait";
 import type { ApiFailure } from "./api-call";
 
@@ -11,7 +11,11 @@ import type { ApiFailure } from "./api-call";
 
 export type AdminAction = "change_role" | "deactivate" | "reactivate" | "reset_mfa" | "assign" | "end_assignment" | "set_endpoint" | "clear_endpoint" | "invite" | "resend_invitation" | "revoke_invitation";
 
-export const REAUTH_MESSAGE = "Your sign-in is more than a few minutes old. Sign out and sign in again, then repeat this.";
+/** The number comes from the server rule itself (lib/auth/config.ts has no imports, so it is safe in a client module). */
+const FRESH_MINUTES = FRESH_PASSWORD_SECONDS / 60;
+
+export const REAUTH_MESSAGE =
+  `This action needs a fresh sign-in. Actions that change who can access the practice or its data ask you to confirm it is you, and your current sign-in is older than ${FRESH_MINUTES} minutes. Sign out, sign in again, then repeat the action.`;
 
 /** True when the only thing wrong is an old sign-in: the screen then offers sign-out. */
 export function needsReauth(failure: ApiFailure | null): boolean {
