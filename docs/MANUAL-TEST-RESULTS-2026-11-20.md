@@ -22,6 +22,7 @@ Environment: main checkout at `1530f20` (after #111), Next 16.4.6, `INFERENCE_MO
 | G11 | Observed, finding U2 | Invite and revoke refused with a vague "sign-in more than a few minutes old" message (the rule is 5 minutes from sign-in, by design). Message rewritten in #113 |
 | G1, G3, G4, G6, G7, G9, G13 | Pass | Invitation screens, same answer for an existing address, accept form, refusals keep the form, Back shows no token, new associate reaches authenticator setup, resend kills the old link |
 | B1 to B8, B13 to B17, I3, F12, H1 (associate half), G8 | Skipped by decision | Sam, 2026-11-21: the owner is what matters most; associate click-through skipped. The role stays in the product as built and is still covered at route level in CI (`authz`, `admin`, `clients` suites). Revisit before a second person is invited for real |
+| D1, D3 to D7 | Pass | Eleventh wrong password is limited; signed-out pages and pasted addresses go to `/login`; API JSON shows own practice only; `/api/health` is `{"status":"ok"}`; own row on `/admin/users` has no buttons |
 
 ## UX findings
 
