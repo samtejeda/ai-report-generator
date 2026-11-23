@@ -247,7 +247,7 @@ jobs:
       pull-requests: write # only to post the summary comment
     steps:
       # This action publishes exact release tags only (no floating v5 tag); Dependabot bumps it.
-      - uses: actions/dependency-review-action@v5.0.0
+      - uses: actions/dependency-review-action@v5.0.1
         with:
           fail-on-severity: high
           # Default is runtime only; build tooling runs in CI and on developer machines too.
