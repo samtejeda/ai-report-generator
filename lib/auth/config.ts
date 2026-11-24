@@ -16,12 +16,13 @@ export const SESSION_ABSOLUTE_SECONDS = 12 * 60 * 60;
 export const SESSION_SLIDE_INTERVAL_SECONDS = 60;
 
 /**
- * Better Auth applies this to its own "sensitive" endpoints (none of which we expose).
- * Change-password does not rely on it: it asks for the current password every time. Later
- * sensitive actions (owner MFA reset, changing the inference endpoint) must re-check
- * freshness themselves.
+ * How recent a sign-in must be for a sensitive action: 30 minutes (Sam, 2026-11-24; was 5). The one
+ * source for `guardedRoute({ fresh: true })` (owner MFA reset, inference endpoint, invitations), for the
+ * re-sign-in message and for Better Auth's own `freshAge` on its "sensitive" endpoints (none of which we
+ * expose). Change-password does not rely on it: it asks for the current password every time.
+ * Not the code-step window (TWO_FACTOR_CHALLENGE_SECONDS) and not the idle or absolute session limits.
  */
-export const FRESH_PASSWORD_SECONDS = 5 * 60;
+export const FRESH_PASSWORD_SECONDS = 30 * 60;
 
 /** How long the code step stays open after the password is accepted. */
 export const TWO_FACTOR_CHALLENGE_SECONDS = 5 * 60;
