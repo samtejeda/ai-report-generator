@@ -11,7 +11,9 @@
 // What "applied" means: drizzle does NOT decide by hash. `migrate` applies a migration only when its journal
 // `when` is newer than the newest `created_at` already in drizzle.__drizzle_migrations. So a missing migration
 // whose `when` is not newer than that would be skipped by `db:migrate` forever; that is reported as BLOCKED,
-// not MISSING, because "Run: npm run db:migrate" would be a lie.
+// not MISSING, because "Run: npm run db:migrate" would be a lie. A journal entry whose timestamp IS in the
+// database but with a different hash was applied from a different version of its file (edited after it was
+// applied): drizzle counts it as applied and `db:migrate` will never change it, so that is DRIFT.
 //
 // Reads DATABASE_URL_UNPOOLED (the owner credential in .env.local; the app role cannot read the drizzle
 // schema). It never prints a URL, user, password, token or full host: only the endpoint name (the first
@@ -67,18 +69,27 @@ export async function readApplied(client) {
 
 /**
  * Pure comparison. `applied` is [{ hash, createdAt }]; `expected` is expectedMigrations().
- * @returns {{ kind: "ok" | "missing" | "blocked", total: number, missing: object[], blocked: object[], ahead: number }}
+ * missing: not in the database at all. blocked: the part of missing that db:migrate would skip. changed: the
+ * timestamp is in the database but the hash differs (applied from another version of the file).
+ * @returns {{ kind: "ok" | "missing" | "blocked" | "drift", total: number, missing: object[], blocked: object[], changed: object[], ahead: number }}
  */
 export function analyze(expected, applied) {
   const have = new Set(applied.map((a) => a.hash));
   const known = new Set(expected.map((e) => e.hash));
-  const missing = expected.filter((e) => !have.has(e.hash));
+  // Timestamps of applied rows that match no journal entry: only those can be "this migration, from an older
+  // or edited file". A timestamp held by a row that IS another journal entry is a collision, not an edit.
+  const strayStamps = new Set(applied.filter((a) => !known.has(a.hash)).map((a) => a.createdAt));
+  const notFound = expected.filter((e) => !have.has(e.hash));
+  const changed = notFound.filter((e) => strayStamps.has(e.when));
+  const missing = notFound.filter((e) => !strayStamps.has(e.when));
   const newest = applied.reduce((max, a) => Math.max(max, a.createdAt), -Infinity);
   // drizzle-orm pg-core dialect: apply only when lastDbMigration.created_at < migration.folderMillis
   const blocked = missing.filter((m) => !(newest < m.when));
-  const ahead = applied.filter((a) => !known.has(a.hash)).length;
-  const kind = blocked.length ? "blocked" : missing.length ? "missing" : "ok";
-  return { kind, total: expected.length, missing, blocked, ahead };
+  // The applied rows that stand for a changed migration are not "ahead"; they are the same migration.
+  const changedStamps = new Set(changed.map((e) => e.when));
+  const ahead = applied.filter((a) => !known.has(a.hash) && !changedStamps.has(a.createdAt)).length;
+  const kind = blocked.length ? "blocked" : missing.length ? "missing" : changed.length ? "drift" : "ok";
+  return { kind, total: expected.length, missing, blocked, changed, ahead };
 }
 
 const HINTS = {
@@ -117,13 +128,16 @@ export function report(result, endpoint) {
     lines.push(
       `BLOCKED: npm run db:migrate will SKIP ${result.blocked[0].tag}${more(result.blocked)} on ${endpoint}: its journal timestamp is not newer than the newest applied migration. The migration must be regenerated with a newer timestamp (ask database-builder); running db:migrate will not fix it.`,
     );
-  } else {
+  } else if (result.kind === "missing") {
     lines.push(`MISSING: ${result.missing[0].tag}${more(result.missing)} on ${endpoint}. Run: npm run db:migrate`);
+  } else {
+    lines.push(
+      `DRIFT: ${result.changed[0].tag}${more(result.changed)} on ${endpoint}: applied from a different version of its file (same timestamp, different content). db:migrate will not change this; check that the database matches the file (ask database-builder).`,
+    );
   }
-  if (result.missing.length) {
-    const blockedTags = new Set(result.blocked.map((b) => b.tag));
-    for (const m of result.missing) lines.push(`  - ${m.tag} ${blockedTags.has(m.tag) ? "(would be skipped by db:migrate)" : "(not applied)"}`);
-  }
+  const blockedTags = new Set(result.blocked.map((b) => b.tag));
+  for (const m of result.missing) lines.push(`  - ${m.tag} ${blockedTags.has(m.tag) ? "(would be skipped by db:migrate)" : "(not applied)"}`);
+  for (const m of result.changed) lines.push(`  - ${m.tag} (applied from a different version of the file)`);
   if (result.ahead) {
     lines.push(
       `NOTE: the database also has ${result.ahead} migration(s) this checkout does not have (a newer branch was applied, or you have not pulled main).`,
@@ -182,7 +196,9 @@ export async function runCli({ argv, env, makeClient, log = console.log, err = c
   try {
     if (warn) {
       // Silent without an owner URL (CI and deployed environments hold the runtime variables only) or on a host
-      // that is not Neon. Never blocks: every path below returns 0.
+      // that is not Neon. Never blocks: every path below returns 0. Only MISSING and BLOCKED are shown: DRIFT is a
+      // rarer, slower problem that db:migrate cannot clear, so repeating it at every start would only train
+      // people to ignore the warning; `npm run db:status` still reports it.
       if (!checkNeonUrl(url).ok) return 0;
       const { result, endpoint } = await checkStatus({ url, drizzleDir, makeClient, timeoutMs: timeoutMs ?? WARN_TIMEOUT_MS });
       if (result.kind === "missing" || result.kind === "blocked") for (const l of warningLines(result, endpoint)) err(l);

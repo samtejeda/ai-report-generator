@@ -3,7 +3,7 @@ export const STATUS_TIMEOUT_MS: number;
 export type ExpectedMigration = { tag: string; hash: string; when: number };
 export type AppliedMigration = { hash: string; createdAt: number };
 export type StatusResult =
-  | { kind: "ok" | "missing" | "blocked"; total: number; missing: ExpectedMigration[]; blocked: ExpectedMigration[]; ahead: number }
+  | { kind: "ok" | "missing" | "blocked" | "drift"; total: number; missing: ExpectedMigration[]; blocked: ExpectedMigration[]; changed: ExpectedMigration[]; ahead: number }
   | { kind: "unreadable"; reason: string };
 export type StatusClient = { query: (sql: string) => Promise<{ rows: Record<string, unknown>[] }>; end?: () => unknown };
 export function expectedMigrations(drizzleDir: string): ExpectedMigration[];
@@ -12,7 +12,7 @@ export function readApplied(client: StatusClient): Promise<AppliedMigration[]>;
 export function analyze(
   expected: ExpectedMigration[],
   applied: AppliedMigration[],
-): { kind: "ok" | "missing" | "blocked"; total: number; missing: ExpectedMigration[]; blocked: ExpectedMigration[]; ahead: number };
+): { kind: "ok" | "missing" | "blocked" | "drift"; total: number; missing: ExpectedMigration[]; blocked: ExpectedMigration[]; changed: ExpectedMigration[]; ahead: number };
 export function classifyError(error: unknown): string;
 export function report(result: StatusResult, endpoint?: string): { exitCode: number; lines: string[] };
 export function checkStatus(options: {

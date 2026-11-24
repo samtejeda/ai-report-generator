@@ -174,6 +174,55 @@ describe("the output", () => {
   });
 });
 
+describe("drift: a migration applied from a different version of its file", () => {
+  // What the real scratch branch showed: same count of rows, same timestamps, two different hashes.
+  const edited = (idx: number[]) =>
+    asApplied(expected).map((a, i) => (idx.includes(i) ? { ...a, hash: `${i}`.padStart(64, "d") } : a));
+
+  it("analyze: same timestamp, different hash is changed, not missing, not blocked, and not 'ahead'", () => {
+    const r = analyze(expected, edited([3]));
+    expect(r.kind).toBe("drift");
+    expect(r.changed.map((m) => m.tag)).toEqual([expected[3].tag]);
+    expect(r.missing).toEqual([]);
+    expect(r.blocked).toEqual([]);
+    expect(r.ahead).toBe(0);
+  });
+
+  it("db:status: DRIFT first line, exit 1, and no 'Run: npm run db:migrate' (it would change nothing)", async () => {
+    const r = await run(URL_OK, fakeClient({ applied: edited([3, 5]) }));
+    expect(r.code).toBe(1);
+    expect(r.out[0]).toMatch(new RegExp(`^DRIFT: ${expected[3].tag} \\(and 1 more\\) on ${ENDPOINT.replace(/\*/g, "\\*")}: applied from a different version`));
+    expect(r.out[0]).not.toMatch(/Run: npm run db:migrate/);
+    expect(r.out.slice(1)).toEqual([expected[3], expected[5]].map((m) => `  - ${m.tag} (applied from a different version of the file)`));
+  });
+
+  it("a truly missing migration outranks drift, and both are listed with their own label", async () => {
+    const applied = edited([3]).slice(0, -1);
+    const r = await run(URL_OK, fakeClient({ applied }));
+    expect(r.code).toBe(1);
+    expect(r.out[0]).toMatch(/^MISSING: /);
+    expect(r.out).toContain(`  - ${expected.at(-1)!.tag} (not applied)`);
+    expect(r.out).toContain(`  - ${expected[3].tag} (applied from a different version of the file)`);
+  });
+
+  it("a rows-not-in-journal count still works next to drift (a newer migration from another branch)", () => {
+    const r = analyze(expected, [...edited([3]), { hash: "9".repeat(64), createdAt: Date.now() }]);
+    expect(r.kind).toBe("drift");
+    expect(r.ahead).toBe(1);
+  });
+
+  it("--warn stays silent on drift (db:migrate cannot clear it) and exits 0", async () => {
+    const r = await run(URL_OK, fakeClient({ applied: edited([3]) }), ["--warn"]);
+    expect(r.code).toBe(0);
+    expect(r.all).toBe("");
+  });
+
+  it("no secret in the drift output", async () => {
+    const r = await run(URL_OK, fakeClient({ applied: edited([3]) }));
+    for (const s of SECRETS) expect(r.all).not.toContain(s);
+  });
+});
+
 describe("unreadable: reason codes, exit 2, never the driver's text", () => {
   const cases: [string, unknown, string][] = [
     ["permission denied for schema drizzle", Object.assign(new Error(`permission denied for schema drizzle (${USER}@ep-dark-cake-b4i1tg5a.c-6.us-east-2.aws.neon.tech)`), { code: "42501" }), "permission_denied"],
