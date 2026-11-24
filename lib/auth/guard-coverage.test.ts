@@ -103,8 +103,10 @@ describe("pages", () => {
     for (const file of ["app/login/page.tsx", "app/forgot-password/page.tsx"]) expect(read(file), file).toMatch(/SignedOutOnly/);
     expect(read("components/auth/signed-out-only.tsx")).toMatch(/leaveIfSignedIn\(/);
     expect(read("app/reset-password/page.tsx")).toMatch(/leaveIfSignedIn\(\{\s*resetLink:/);
-    expect(read("app/accept-invitation/page.tsx")).toMatch(/leaveIfSignedIn\(\{\s*resetLink:/);
-    for (const file of ["lib/auth/visitor.ts", "lib/auth/landing.ts", "components/auth/signed-out-only.tsx"]) {
+    // The invitation page hands everything to its gate (a page file cannot export extra names); the gate keeps the rule.
+    expect(read("app/accept-invitation/page.tsx")).toMatch(/AcceptInvitationGate/);
+    expect(read("components/auth/accept-invitation-gate.tsx")).toMatch(/leaveIfSignedIn\(\{\s*resetLink:/);
+    for (const file of ["lib/auth/visitor.ts", "lib/auth/landing.ts", "components/auth/signed-out-only.tsx", "components/auth/accept-invitation-gate.tsx"]) {
       expect(read(file), file).not.toMatch(/tenantDb|client-access|@\/lib\/db/);
     }
     expect(read("proxy.ts")).not.toMatch(/lib\/auth\/(visitor|landing|server)|getSessionOrNull/);

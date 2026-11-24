@@ -12,7 +12,7 @@ import { fieldClass } from "./auth-card";
 import { PasswordField } from "./password-field";
 
 // Turns an emailed single-use link into an account. The token is the credential, so:
-//  - it leaves the address bar, history and screenshots as soon as the page is in memory;
+//  - it leaves the address bar, history and screenshots as soon as the page is in memory (whether or not the link is usable);
 //  - it goes only in the POST body, never a URL, storage, a log or a message;
 //  - this component's copy of it is dropped the moment the link proves unusable or is spent;
 //  - one sentence for every bad link, whatever the reason (the server answers the same way);
@@ -32,9 +32,12 @@ export function AcceptInvitationForm({ token }: { token: string | null }) {
   });
 
   useEffect(() => {
-    // Keep the token out of the address bar, history and screenshots once it is in memory.
-    if (token) window.history.replaceState(null, "", "/accept-invitation");
-  }, [token]);
+    // Keep the token out of the address bar, history and screenshots once the page is in memory. Always, not
+    // only when this component holds a token: the server shows the not-valid page for an unusable link, and
+    // that page must not leave the (spent or made-up) token in the address bar either. With no token in the
+    // address this changes nothing, so every variant of the page behaves the same.
+    window.history.replaceState(null, "", "/accept-invitation");
+  }, []);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

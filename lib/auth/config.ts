@@ -82,6 +82,11 @@ export const RATE_LIMITS = {
   // POST /api/invitations/accept (our own route, not Better Auth's): per client address, every request counts,
   // never per token or per account.
   acceptInvitation: { window: 15 * 60, max: 10 },
+  // The accept-invitation PAGE's read-only "is this link usable" check (a server component, no route): per client
+  // address, well-formed tokens only, its own bucket so reloads do not use up the submit allowance. When it is
+  // exceeded the page falls back to showing the form (the submit route decides), which answers the same for every
+  // token, so being limited tells nobody anything.
+  checkInvitation: { window: 15 * 60, max: 30 },
 } as const;
 
 /**
