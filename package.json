@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/db-status.mjs --warn",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -12,7 +13,8 @@
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:check": "drizzle-kit check"
+    "db:check": "drizzle-kit check",
+    "db:status": "node scripts/db-status.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.94",
