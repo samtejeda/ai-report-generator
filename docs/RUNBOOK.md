@@ -2,6 +2,16 @@
 
 Step-by-step failure recovery. Stub for now; fill each section as the infrastructure lands, and record the date it was last drilled. Anything not yet drilled is **unverified**.
 
+## After pulling main (dev)
+
+1. `git checkout main`, then `git pull`.
+2. `npm install` if `package.json` or the lockfile changed.
+3. `npm run db:status`: one line says whether the database in `DATABASE_URL_UNPOOLED` (your owner credential in `.env.local`) has every migration in `drizzle/`.
+4. If it says `MISSING`, run `npm run db:migrate` (applying to a real database needs Sam's go-ahead, see the sections below).
+5. `npm run db:status` again. It must say `OK`.
+
+**The quiet output of `npm run db:migrate` proves nothing**: drizzle-kit prints almost the same whether it applied something or found nothing to apply, so only `db:status` tells you. It is read-only, prints only a masked endpoint name (never a URL, user, password or token) and refuses any host that is not a Neon host. Other first words: `BLOCKED` means `db:migrate` will skip a migration because its journal timestamp is not newer than the newest applied one (running it will not help; the migration has to be regenerated); `DRIFT` means a migration was applied from a different version of its file (same timestamp, different content; `db:migrate` changes nothing, so check the database against the file); `UNREADABLE` names the reason (no owner URL, not a Neon host, the app role's URL instead of the owner's, timeout). `OK` with a `NOTE` line means the database is ahead of your checkout (a newer branch was applied or you have not pulled). `npm run dev` runs the same check first (`predev`) and prints a boxed warning only for `MISSING` or `BLOCKED`; it is silent otherwise and never stops `dev`.
+
 ## Rollback a bad deploy
 
 _TODO when Vercel is connected._ Expected: promote the previous Vercel deployment (or `vercel rollback`), then revert the PR on a `fix/` branch. Rollback reverts code, not schema; migrations are forward-only and backward-compatible with the previous deploy.
