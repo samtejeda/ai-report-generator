@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import * as schema from "@/lib/db/schema";
+import { FRESH_PASSWORD_SECONDS } from "./config";
 import { BASE, ENABLED, startHarness, type Handler, type Person } from "./integration-harness";
 
 // The admin routes (feat/auth-admin) end to end: the REAL route modules, the REAL Better Auth
@@ -173,7 +174,9 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
     });
 
     it("a stale sign-in is 403 reauth_required, audited, and nothing changes; a read still works", async () => {
-      await h.signedInAgo(ownerA, 10 * 60);
+      await h.signedInAgo(ownerA, FRESH_PASSWORD_SECONDS - 60);
+      expect((await putEndpoint(ownerA, { endpoint: GOOD })).status).toBe(200);
+      await h.signedInAgo(ownerA, FRESH_PASSWORD_SECONDS + 60);
       const r = await putEndpoint(ownerA, { endpoint: GOOD_B });
       expect(r.status).toBe(403);
       expect(r.json).toEqual({ error: { code: "reauth_required", message: "Sign in again to do this." } });
@@ -480,7 +483,7 @@ describe.skipIf(!ENABLED)("admin routes through the real stack", () => {
     });
 
     it("a stale sign-in is 403 reauth_required and nothing is reset; a cross-site or missing Origin is 403", async () => {
-      await h.signedInAgo(ownerA, 10 * 60);
+      await h.signedInAgo(ownerA, FRESH_PASSWORD_SECONDS + 60);
       const stale = await reset(ownerA, resetA.userId);
       expect(stale.status).toBe(403);
       expect(stale.json.error?.code).toBe("reauth_required");

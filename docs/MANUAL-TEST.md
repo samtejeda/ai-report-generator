@@ -96,7 +96,7 @@ Roles are still covered in CI at the route level (`authz.integration.test.ts`, 3
 | C1.1 | On an empty section of a draft report, press "Generate test text" with no endpoint set | A fixed message that no inference endpoint is set up; the report stays `draft`; nothing was sent anywhere |
 | C1.2 | `/admin/inference-endpoint`: enter a made-up address that is not a `*.ts.net` address, for example an `https://example.com` address | Refused by the server |
 | C1.3 | Enter a plain `http://` Tailscale-looking address | Refused |
-| C1.4 | (Needs a sign-in from the last 5 minutes; if refused, sign in again) Enter `https://test-box.tailnet-name.ts.net` (a well-formed Tailscale-shaped address that does not exist), save; then press Generate on an empty section | The request fails (the server cannot reach the address); the report moves to `error` and the page shows its fixed error note; **no fallback to any other model**; the Generate button is offered again |
+| C1.4 | (Needs a sign-in from the last 30 minutes; if refused, sign in again) Enter `https://test-box.tailnet-name.ts.net` (a well-formed Tailscale-shaped address that does not exist), save; then press Generate on an empty section | The request fails (the server cannot reach the address); the report moves to `error` and the page shows its fixed error note; **no fallback to any other model**; the Generate button is offered again |
 | C1.5 | **Clear the endpoint again** on `/admin/inference-endpoint` | Shows "not set". Do not leave a fake endpoint on the practice |
 
 ## C2. Generate, edit, Finalize (blocked until Tailscale is set up)
@@ -136,7 +136,7 @@ An associate can now be created by invitation, from the owner screen `/admin/inv
 
 **Invite an associate by the screens** (needs the migrations `0015` and `0016` applied to `dev`; synthetic address only; nothing is sent by email, the link is printed in the dev server terminal):
 
-1. Sign in as the owner (a sign-in from the last 5 minutes is needed to invite: if the screen says so, sign out and in again). Open Practice, then "Invite an associate". Enter `associate-test@example.com` and press "Invite an associate". Expect the sentence "Invitation created. If the address can receive it…" and the invitation in the list as Pending with Resend and Revoke. Inviting an address that already has an account shows the same sentence.
+1. Sign in as the owner (a sign-in from the last 30 minutes is needed to invite: if the screen says so, sign out and in again). Open Practice, then "Invite an associate". Enter `associate-test@example.com` and press "Invite an associate". Expect the sentence "Invitation created. If the address can receive it…" and the invitation in the list as Pending with Resend and Revoke. Inviting an address that already has an account shows the same sentence.
 2. In the terminal running `npm run dev`, find the line starting `[dev email] to=associate-test@example.com` and copy the whole link (`/accept-invitation?token=…`).
 3. Open the link in a separate browser profile (signed out). The address bar changes to `/accept-invitation` at once. Enter a name, a password of 12 or more characters twice (try the Show password buttons) and press "Create account". Expect a move to the sign-in page with "Your account is ready. Sign in now…". Try a short password first: expect a message and the form kept. Reload the accept page after the address bar changed: expect "This invitation link is not valid."
 4. Sign in as the new person; you are sent to set up an authenticator app. Then see no clients. As the owner, assign one (Practice, Client assignments); the new person now sees it.
@@ -144,7 +144,7 @@ An associate can now be created by invitation, from the owner screen `/admin/inv
 
 **Invite an associate by hand** (needs the migrations `0015` and `0016` applied to `dev`, which is Sam's go-ahead; synthetic address only, for example `associate-test@example.com`; nothing is sent, the link is printed in the dev server terminal):
 
-1. Sign in as the owner (sign in again if the last sign-in was more than 5 minutes ago; creating an invitation needs that).
+1. Sign in as the owner (sign in again if the last sign-in was more than 30 minutes ago; creating an invitation needs that).
 2. On any page of the app, open the browser console and run `await (await fetch('/api/admin/invitations', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({email: 'associate-test@example.com'})})).json()`. Expect `{data: {id, email, role: "associate", status: "pending", expiresAt}}`.
 3. In the terminal running `npm run dev`, find the line starting `[dev email] to=associate-test@example.com` and copy the token after `token=` (43 characters).
 4. In a separate browser profile (or signed out), open any page of the app and run `await (await fetch('/api/invitations/accept', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({token: '<the token>', name: 'Test Associate', password: '<a password of 12 or more characters>'})})).json()`. Expect `{data: {status: "accepted"}}` and no sign-in. Run it again: expect `{error: {code: "invalid_invitation", ...}}` (a link works once).
@@ -171,7 +171,7 @@ Also worth trying: invite an address that already has an account (for example yo
 | B13 | Owner | `/admin/users`: change the associate's role to admin, then back | Allowed; the assignments they held stay with them |
 | B14 | Owner | Deactivate the associate | Their next click sends them to sign in; the address stays reserved |
 | B15 | Owner | Reactivate them | They can sign in again with the same password and authenticator |
-| B16 | Owner | Reset the associate's authenticator (needs a sign-in from the last 5 minutes) | They are asked to enroll a new phone at their next sign-in |
+| B16 | Owner | Reset the associate's authenticator (needs a sign-in from the last 30 minutes) | They are asked to enroll a new phone at their next sign-in |
 | B17 | Owner | Try to deactivate or change your own role | No button |
 
 ## E. Second practice (optional, needs Sam's go-ahead)
@@ -221,7 +221,7 @@ The builder's short click-through is in part B, "Invite an associate by the scre
 | G8 | Owner assigns one client to them (B4) | They see it on their next click |
 | G9 | Resend an invitation, then try the old link | The old link fails; the new one works |
 | G10 | Revoke a pending invitation, then try its link | The link fails; the list says revoked |
-| G11 | Wait over 5 minutes after signing in, then invite | A "sign in again" message, not a raw error |
+| G11 | Wait over 30 minutes after signing in, then invite | A "sign in again" message, not a raw error |
 | G12 | Use the page at 375 px wide and with the keyboard only | Everything reachable; nothing cut off |
 | G13 | After accepting, press Back | The token and password are not shown again |
 

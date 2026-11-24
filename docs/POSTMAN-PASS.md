@@ -12,7 +12,7 @@ Mark each row Pass, Fail or Skip in the results table at the end. For a Fail wri
 
 1. **Signing in is a browser job.** The code step (authenticator) makes a plain API sign-in awkward. Sign in once in the browser, then copy the session cookie into Postman (find it in the browser's developer tools under Application, Cookies, `localhost`; treat it like a password, never commit or paste it). Session limits apply: idle out at 2 hours, hard stop at 12.
 2. **State-changing calls need an `Origin` header** equal to the app's own origin, exactly `http://localhost:3000` (no trailing slash). Without it every POST, PUT, PATCH and DELETE is a 403 `forbidden_origin`, checked **before** the session, so an unsigned call without it is also 403, not 401. GET needs no Origin.
-3. **Some calls need a sign-in from the last 5 minutes** (invitations create, inference endpoint, owner MFA reset): a 403 `reauth_required` means sign in again in the browser and copy the new cookie.
+3. **Some calls need a sign-in from the last 30 minutes** (invitations create, inference endpoint, owner MFA reset): a 403 `reauth_required` means sign in again in the browser and copy the new cookie.
 4. **Limits are real and per person or per address.** Space the runs out; the sign-in limit (10 per 15 minutes per address) counts every request. Some rows below need a runner with no delay (P12); everything else is one call at a time.
 5. **Invitation links print in the dev terminal** (`[dev email] to=... token=...`). The token is 43 characters. Never put a token in a note.
 6. **Do not leave a fake inference endpoint set.** Clear it (`PUT` with `{"endpoint": null}`) when you finish P9.
@@ -115,8 +115,8 @@ CI proves this in `authz.integration.test.ts` and the admin and client suites; t
 
 | # | Send | Expect |
 |---|---|---|
-| P7.1 | `POST /api/admin/invitations` `{"email":"associate-test@example.com"}`, signed in within 5 minutes | 201 `{data:{id, email, role:"associate", status:"pending", expiresAt}}`; the link prints in the dev terminal; no token in the response |
-| P7.2 | The same with a sign-in older than 5 minutes | 403 `reauth_required` |
+| P7.1 | `POST /api/admin/invitations` `{"email":"associate-test@example.com"}`, signed in within 30 minutes | 201 `{data:{id, email, role:"associate", status:"pending", expiresAt}}`; the link prints in the dev terminal; no token in the response |
+| P7.2 | The same with a sign-in older than 30 minutes | 403 `reauth_required` |
 | P7.3 | Create with `role: "owner"`, then `role: "admin"`, then an extra key, then no email, then `email: "not-an-address"` | 400 each; nothing stored |
 | P7.4 | Create the same address twice | 201 both; the list shows **one** pending row; the first link is now dead |
 | P7.5 | Invite an address that already has an account (your own owner address) | **The same 201** as P7.1, a row listed, **no mail line** in the terminal, nothing in the response that says why |
@@ -133,13 +133,13 @@ CI proves this in `authz.integration.test.ts` and the admin and client suites; t
 | P7.16 | After accepting, sign in as the new person | Sent to authenticator setup; role is `associate`; no clients (the list is empty) |
 | P7.17 | Read the audit for the whole run | `invitation.created`, `invitation.refused` (reason `address_in_use`, names no practice), `invitation.revoked`, `invitation.resent`, and the accept rows; **no token, hash or address** in any metadata |
 
-## P8. Inference endpoint (owner only, sign-in within 5 minutes)
+## P8. Inference endpoint (owner only, sign-in within 30 minutes)
 
 | # | Send | Expect |
 |---|---|---|
 | P8.1 | `PUT /api/admin/inference-endpoint` with `https://example.com`, `http://box.tailnet.ts.net`, `https://box.tailnet.ts.net:9999`, `https://user:pw@box.tailnet.ts.net`, `https://BOX.tailnet.ts.net`, `https://box.tailnet.ts.net/other`, an IP address, 2 049 characters | 400 each, the value never echoed |
 | P8.2 | `https://box.tailnet.ts.net`, `https://box.tailnet.ts.net:443`, `:8443`, `:10000`, and `.../v1` | 200 each (set, then clear between tries) |
-| P8.3 | With a sign-in older than 5 minutes | 403 `reauth_required` |
+| P8.3 | With a sign-in older than 30 minutes | 403 `reauth_required` |
 | P8.4 | As an associate or admin | 403, audited |
 | P8.5 | `{"endpoint": null}` | 200; `GET` shows null. **Always finish here** |
 | P8.6 | Body with an extra key | 400 |

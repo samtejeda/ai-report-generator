@@ -7,7 +7,7 @@ import { MAX_OFFSET, MAX_PAGE_SIZE } from "@/lib/db/client-access";
 import { listInvitations } from "@/lib/db/invitation-admin";
 
 // Inviting a person to the practice. OWNER ONLY, and only the associate role (the table refuses any
-// other). Creating needs a sign-in from the last 5 minutes: it mails an arbitrary address and adds a
+// other). Creating needs a sign-in from the last 30 minutes: it mails an arbitrary address and adds a
 // person to the practice, so a stolen idle session must not be able to do it. The answer is the same
 // whether or not the address already has an account (see lib/auth/invitation-owner.ts).
 

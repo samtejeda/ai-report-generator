@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { FRESH_PASSWORD_SECONDS } from "./config";
 import { createGuard, type GuardDeps } from "./guard-core";
 import type { SessionContext } from "./session";
 
@@ -157,12 +158,14 @@ describe("guardedRoute: route parameters", () => {
 });
 
 describe("guardedRoute: fresh sign-in on sensitive routes", () => {
+  // The injected limit is the real one, so "just inside" and "just outside" follow the rule if it changes again.
+  const FRESH_LIMIT = FRESH_PASSWORD_SECONDS;
   const at = (secondsAgo: number) => as("owner", new Date(NOW.getTime() - secondsAgo * 1000));
   const sensitive = (handler = vi.fn(async () => Response.json({ done: true }))) => ({
     options: { roles: ["owner"] as const, resource: "organization", fresh: true, handler },
     handler,
   });
-  const withClock = (session: SessionContext | null) => make(session, { now: () => NOW, freshSeconds: 300 });
+  const withClock = (session: SessionContext | null) => make(session, { now: () => NOW, freshSeconds: FRESH_LIMIT });
 
   it("lets a sign-in from a moment ago through", async () => {
     const { guard } = withClock(at(10));
@@ -173,9 +176,9 @@ describe("guardedRoute: fresh sign-in on sensitive routes", () => {
   });
 
   it("accepts exactly the limit and refuses one second past it", async () => {
-    const ok = withClock(at(300));
+    const ok = withClock(at(FRESH_LIMIT));
     expect((await ok.guard(sensitive().options)(get())).status).toBe(200);
-    const stale = withClock(at(301));
+    const stale = withClock(at(FRESH_LIMIT + 1));
     const { options, handler } = sensitive();
     const res = await stale.guard(options)(get());
     expect(res.status).toBe(403);
@@ -191,7 +194,7 @@ describe("guardedRoute: fresh sign-in on sensitive routes", () => {
   });
 
   it("audits the refusal with the reason and the role only", async () => {
-    const { guard, audit } = withClock(at(4000));
+    const { guard, audit } = withClock(at(FRESH_LIMIT + 60));
     await guard(sensitive().options)(get());
     expect(audit).toHaveBeenCalledWith(
       { organizationId: ORG, actorUserId: USER },
@@ -200,7 +203,7 @@ describe("guardedRoute: fresh sign-in on sensitive routes", () => {
   });
 
   it("checks the role first: a role that may not call the route is told 403 forbidden, not about freshness", async () => {
-    const { guard, audit } = withClock(as("admin", new Date(NOW.getTime() - 4000 * 1000)));
+    const { guard, audit } = withClock(as("admin", new Date(NOW.getTime() - (FRESH_LIMIT + 60) * 1000)));
     const res = await guard(sensitive().options)(get());
     expect((await res.json()).error.code).toBe("forbidden");
     expect(audit).toHaveBeenCalledTimes(1);
@@ -213,10 +216,14 @@ describe("guardedRoute: fresh sign-in on sensitive routes", () => {
     expect(res.status).toBe(200);
   });
 
-  it("the default limit is the 5 minutes in lib/auth/config.ts", async () => {
-    const { guard } = make(at(299), { now: () => NOW });
+  it("the rule is 30 minutes (Sam, 2026-11-24): the one place that pins the number", () => {
+    expect(FRESH_PASSWORD_SECONDS).toBe(30 * 60);
+  });
+
+  it("the default limit is FRESH_PASSWORD_SECONDS in lib/auth/config.ts: just inside passes, just outside is refused", async () => {
+    const { guard } = make(at(FRESH_PASSWORD_SECONDS - 1), { now: () => NOW });
     expect((await guard(sensitive().options)(get())).status).toBe(200);
-    const stale = make(at(301), { now: () => NOW });
+    const stale = make(at(FRESH_PASSWORD_SECONDS + 1), { now: () => NOW });
     expect((await stale.guard(sensitive().options)(get())).status).toBe(403);
   });
 });
