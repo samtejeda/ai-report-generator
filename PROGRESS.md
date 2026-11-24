@@ -518,7 +518,7 @@ Single home for anything gated on a later condition. Do not bury these in dated 
 - [ ] Backup restore performed once and recorded in `docs/RUNBOOK.md`. (Drilled 2026-10-13 on the dev project's `test` branch only; repeat on the production Neon project.)
 - [ ] Billing alerts set on Vercel and Neon.
 - [ ] Uptime monitoring and alerting in place.
-- [ ] Run the Postman pass (`docs/POSTMAN-PASS.md`, 104 server-side checks, none run as of 2026-11-09) and record the results; planned for after the end-to-end flow works (Sam, 2026-11-06). Rows that need a `generated` report wait for the inference endpoint; rows that need a second practice wait for Sam's go-ahead (manual test part E).
+- [ ] Run the Postman pass (`docs/POSTMAN-PASS.md`; **first run 2026-11-24: P1, P2, P4.1 to 4.5, P5.1 to 5.3, P6.1 to 6.3 and 6.6, P7 and P8 mostly, P9 (except 9.6 to 9.8 and the audit reads), P10 and P11 spot checks pass, with one finding F5 (the reset-link rate limit counts per token, so it does not bound guessing; fix pending Sam's go-ahead); the audit reads and the Tailscale-blocked rows are still open, see the file's Results**) and record the results; planned for after the end-to-end flow works (Sam, 2026-11-06). Rows that need a `generated` report wait for the inference endpoint; rows that need a second practice wait for Sam's go-ahead (manual test part E).
 - [ ] Run the manual backlog (`docs/MANUAL-TEST.md`, "Everything not yet run"): A1.6, D1, D2, B1 to B8 and B13 to B17 (associate by hand now, by screens after G merges; admin steps skipped), E1 to E3, F1 to F12, G and H after their pull requests merge, and C2, D8 and Finalize-with-unsaved once Tailscale exists.
 - [ ] Phase C gate: Sam explicitly approves real data flowing.
 
