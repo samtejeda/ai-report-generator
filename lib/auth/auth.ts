@@ -315,7 +315,8 @@ export function createAuth(deps: AuthDeps) {
         "/sign-in/email": RATE_LIMITS.signIn,
         "/request-password-reset": RATE_LIMITS.requestPasswordReset,
         "/reset-password": RATE_LIMITS.resetPassword,
-        "/reset-password/*": RATE_LIMITS.resetPassword,
+        // No rule for GET /reset-password/{token}: Better Auth would count each token separately (the token is
+        // in the path). The emailed link is limited per address in the route, lib/auth/reset-link-limit.ts.
         "/send-verification-email": RATE_LIMITS.sendVerificationEmail,
         "/verify-email": RATE_LIMITS.verifyEmail,
         "/change-password": RATE_LIMITS.changePassword,

@@ -70,6 +70,10 @@ export const RATE_LIMITS = {
   signIn: { window: 15 * 60, max: 10 },
   requestPasswordReset: { window: 15 * 60, max: 3 },
   resetPassword: { window: 15 * 60, max: 5 },
+  // GET /api/auth/reset-password/{token}, the emailed link. Counted per client address ONLY (our own check in
+  // lib/auth/reset-link-limit.ts, before Better Auth): Better Auth keys on address plus path and the token is in
+  // the path, so its own counter gave every guessed token a fresh allowance (finding F5, 2026-11-24).
+  resetLink: { window: 15 * 60, max: 5 },
   sendVerificationEmail: { window: 15 * 60, max: 3 },
   verifyEmail: { window: 15 * 60, max: 10 },
   changePassword: { window: 15 * 60, max: 5 },
