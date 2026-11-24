@@ -10,7 +10,7 @@ Mark each step Pass, Fail or Skip in the results table at the end. For a Fail, w
 
 | Part | Needs | Status 2026-11-09 |
 |---|---|---|
-| A. Owner: sign-in, account, clients, reports, admin screens | The owner account (exists on `dev`, MFA on) | **Done 2026-10-28 to 2026-11-06** (results file). Left over: A1.6 (ticked trusted-device box), A3.4 and A4.5 (server limits, go to the Postman pass) |
+| A. Owner: sign-in, account, clients, reports, admin screens | The owner account (exists on `dev`, MFA on) | **Done 2026-10-28 to 2026-11-06** (results file). Left over: A3.4 and A4.5 (server limits, go to the Postman pass) |
 | D. Edge cases and abuse | Same | D3 to D7 done. **D1 and D2 not run** (D1 can run now; D2 is a 2-hour wait). **D8 blocked** (Tailscale) |
 | C1. Generate with no endpoint set; an endpoint the server must refuse | Same | **Done** |
 | C2. Generate that succeeds, then edit and Finalize | Tailscale on this machine, `tailscale serve` in front of Ollama, the endpoint set on the practice | **Blocked: Tailscale is not installed here.** A report only becomes `generated` when generation succeeds, so Finalize (and the Finalize-with-unsaved-text check, #87) cannot be reached without it |

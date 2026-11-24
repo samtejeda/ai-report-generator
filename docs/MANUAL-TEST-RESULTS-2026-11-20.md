@@ -25,6 +25,7 @@ Environment: main checkout at `1530f20` (after #111), Next 16.4.6, `INFERENCE_MO
 | D1, D3 to D7 | Pass | Eleventh wrong password is limited; signed-out pages and pasted addresses go to `/login`; API JSON shows own practice only; `/api/health` is `{"status":"ok"}`; own row on `/admin/users` has no buttons |
 | M1 (login, 375 px), M5 (accept page, 375 px), K4 (wrong password keeps the form) | Pass | Driven by the supervising session through the Chrome DevTools MCP in an isolated browser context, signed out, 375x812 mobile emulation: no horizontal overflow on either page (scrollWidth 375), all controls on screen; wrong password for a made-up address (`nobody-test@example.com`) shows "Email or password is incorrect." in a live alert, email and password kept; every control on the accept page takes a visible focus ring. Screenshots looked at by the supervising session, not stored. A made-up address was used so the owner's sign-in limit was not touched |
 | M2, M3, M4, K1, K2, K3, K5 | Pass | Sam, by hand: clients and report pages, admin invitations and users at 375 px; the unsaved-text dialog by keyboard (Go back and save focus, Esc, Download anyway); tab order on a report; invite form keeps the typed text |
+| A1.6 (a to d) | Pass | Sam, 2026-11-24: trusted device skips the code step on the next sign-in in the same browser, a private window still asks for the code, a wrong password is still refused |
 
 ## UX findings
 
