@@ -6,6 +6,7 @@ import { drizzle, type NeonDatabase } from "drizzle-orm/neon-serverless";
 import { audit } from "@/lib/audit";
 import * as schema from "@/lib/db/schema";
 import type { Mail } from "@/lib/email";
+import { addressBucket } from "./address-bucket";
 import { createAuth, type Auth } from "./auth";
 import { resolveSession } from "./session";
 
@@ -13,6 +14,9 @@ import { resolveSession } from "./session";
 // rate-limit test can go through the real route (allow-list, response) rather than around it.
 const serverModule = vi.hoisted(() => ({ auth: undefined as { handler: (request: Request) => Promise<Response> } | undefined }));
 vi.mock("@/lib/auth/server", () => ({ getAuth: () => serverModule.auth }));
+// Likewise the address limit on the emailed reset link reads the auth_runtime client from lib/db/auth-db.
+const authDbModule = vi.hoisted(() => ({ db: undefined as unknown }));
+vi.mock("@/lib/db/auth-db", () => ({ getAuthDb: () => authDbModule.db }));
 
 // Auth flows against a scratch Neon branch (the `test` branch of the dev project), through the
 // REAL Better Auth handler and the REAL database roles: auth_runtime for Better Auth,
@@ -216,6 +220,7 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
     });
     hash = (await auth.$context).password.hash;
     serverModule.auth = auth;
+    authDbModule.db = authDb;
   }, 180_000);
 
   afterAll(async () => {
@@ -1339,6 +1344,72 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
         expect(res.status).toBe(400);
       }
       expect((await call("/reset-password", { body: { token: "guess-6", newPassword: "a brand new passphrase 99" }, ip })).status).toBe(429);
+    });
+
+    describe("the emailed reset link (GET /api/auth/reset-password/{token}, finding F5)", () => {
+      // Through the real route module: the allow-list, the address limit, then the real Better Auth instance.
+      const open = async (token: string, ip: string) => {
+        const { GET } = await import("@/app/api/auth/[...all]/route");
+        return GET(new Request(`${BASE}/api/auth/reset-password/${token}?callbackURL=/reset-password`, { headers: { "x-forwarded-for": ip, "user-agent": "vitest" }, redirect: "manual" }));
+      };
+      // A random IPv6 address per test (counters persist 15 minutes, and nextIp() wraps after 250 calls, which would let an
+      // address that an earlier test in this file used show up here as stray rows).
+      const freshIp = () => `2001:db8:${Math.floor(Math.random() * 65_536).toString(16)}:${Math.floor(Math.random() * 65_536).toString(16)}::1`;
+      const garbage = (label: string) => `${label}-${crypto.randomUUID().replaceAll("-", "")}`;
+      const redirectsAsInvalid = (res: Response) => {
+        expect(res.status).toBe(302);
+        expect(res.headers.get("location")).toMatch(/\/reset-password\?error=INVALID_TOKEN$/);
+      };
+
+      it("six DIFFERENT garbage tokens from one address: the first five redirect to ?error=INVALID_TOKEN, the sixth is 429", async () => {
+        const ip = freshIp();
+        for (let i = 1; i <= 5; i++) redirectsAsInvalid(await open(garbage(`diff${i}`), ip));
+        const sixth = await open(garbage("diff6"), ip);
+        expect(sixth.status).toBe(429);
+        // Better Auth's own refusal: same body, and the wait in whole seconds within the 15 minute window.
+        expect(await sixth.json()).toEqual({ message: "Too many requests. Please try again later." });
+        const wait = sixth.headers.get("x-retry-after");
+        expect(wait).toMatch(/^[1-9]\d*$/);
+        expect(Number(wait)).toBeLessThanOrEqual(15 * 60);
+        expect((await open(garbage("diff7"), ip)).status).toBe(429);
+      });
+
+      it("the same token counts too, and a throttled request is refused before anything about the token is looked at", async () => {
+        const ip = freshIp();
+        const token = garbage("same");
+        for (let i = 0; i < 5; i++) redirectsAsInvalid(await open(token, ip));
+        expect((await open(token, ip)).status).toBe(429);
+        expect((await open(garbage("other"), ip)).status).toBe(429);
+      });
+
+      it("counts by address only: another address is not blocked, and our counter has one key per address, never one with a token", async () => {
+        const blocked = freshIp();
+        const free = freshIp();
+        for (let i = 0; i < 6; i++) await open(garbage(`addr${i}`), blocked);
+        expect((await open(garbage("addr-more"), blocked)).status).toBe(429);
+        redirectsAsInvalid(await open(garbage("addr-free"), free));
+        // Better Auth's own default per-path counters may also hold a row per token it was shown (at most the five that got through); ours is the one ending in the fixed label.
+        const ours = await owner.select().from(schema.authRateLimits).where(sql`${schema.authRateLimits.key} like ${`${addressBucket(blocked)}|%{token}`}`);
+        expect(ours.map((r) => [r.key, r.count])).toEqual([[`${addressBucket(blocked)}|/reset-password/{token}`, 5]]);
+        const freeRows = await owner.select().from(schema.authRateLimits).where(sql`${schema.authRateLimits.key} = ${`${addressBucket(free)}|/reset-password/{token}`}`);
+        expect(freeRows.map((r) => r.count)).toEqual([1]);
+      });
+
+      it("an IPv6 address is counted by its /64, like Better Auth's own limits", async () => {
+        const a = Math.floor(Math.random() * 65_536).toString(16);
+        const b = Math.floor(Math.random() * 65_536).toString(16);
+        for (let i = 0; i < 5; i++) redirectsAsInvalid(await open(garbage(`v6-${i}`), `2001:db8:${a}:${b}::1`));
+        expect((await open(garbage("v6-6"), `2001:db8:${a}:${b}:aaaa::2`)).status).toBe(429);
+      });
+
+      it("a path that is not a reset link is not counted here: 404 from the allow-list, no counter row", async () => {
+        const ip = freshIp();
+        const { GET } = await import("@/app/api/auth/[...all]/route");
+        const res = await GET(new Request(`${BASE}/api/auth/reset-password/a/b`, { headers: { "x-forwarded-for": ip } }));
+        expect(res.status).toBe(404);
+        const rows = await owner.select().from(schema.authRateLimits).where(sql`${schema.authRateLimits.key} like ${`${addressBucket(ip)}|%`}`);
+        expect(rows).toEqual([]);
+      });
     });
 
     it("counters live in the database, so they hold across server instances", async () => {
