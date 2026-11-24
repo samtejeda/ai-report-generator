@@ -215,15 +215,16 @@ The builder's short click-through is in part B, "Invite an associate by the scre
 | G2 | Associate and admin try the same address | The 404 page |
 | G3 | Invite a new address, then invite your own owner address | The same success message both times; the second prints no mail line in the dev terminal |
 | G4 | Copy the link from the dev terminal, open it in another browser profile | The page asks for a name and a password twice (show/hide works); the token is gone from the address bar |
-| G5 | Open the same link again after accepting, and a link with a letter changed | One and the same generic error each time |
+| G4b | Open a link that was never issued (change a letter), or `/accept-invitation` with no token | The same "This invitation link is not valid" page, with no form; the token is gone from the address bar even here |
+| G5 | Open the same link again after accepting, and a link with a letter changed | **The page itself says "This invitation link is not valid" and shows no form** (nothing to submit), the same page both times and the same as for a missing token; it never says used or changed |
 | G6 | Short password, passwords that do not match | Plain refusals; nothing is created |
 | G7 | After accepting: sign in as the new person | Sent to authenticator setup; after it, no clients (B1) |
 | G8 | Owner assigns one client to them (B4) | They see it on their next click |
-| G9 | Resend an invitation, then try the old link | The old link fails; the new one works |
-| G10 | Revoke a pending invitation, then try its link | The link fails; the list says revoked |
+| G9 | Resend an invitation, then try the old link | The old link shows the not-valid page with no form; the new one shows the form |
+| G10 | Revoke a pending invitation, then try its link | The page says "This invitation link is not valid" with no form (the same page as G5, no mention of revoked); the list says revoked |
 | G11 | Wait over 5 minutes after signing in, then invite | A "sign in again" message, not a raw error |
 | G12 | Use the page at 375 px wide and with the keyboard only | Everything reachable; nothing cut off |
-| G13 | After accepting, press Back | The token and password are not shown again |
+| G13 | After accepting, press Back; also press Back after opening an unusable link | The token and password are not shown again, and no token is in the address bar or history in either case |
 
 Sending real mail is not built (Resend, decisions row 8): the link only appears in the dev terminal until it is.
 
