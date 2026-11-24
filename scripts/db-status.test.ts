@@ -21,8 +21,8 @@ const asApplied = (list: typeof expected): AppliedMigration[] => list.map((e) =>
 const USER = "ownerx";
 const PASSWORD = "p%40ss-secret-9";
 const TOKEN = "tok123";
-const URL_OK = `postgresql://${USER}:${PASSWORD}@ep-dark-cake-b4i1tg5a.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&token=${TOKEN}`;
-const ENDPOINT = "ep-dark-cake-b4i1tg5a.***";
+const URL_OK = `postgresql://${USER}:${PASSWORD}@ep-fixture-host-000000.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&token=${TOKEN}`;
+const ENDPOINT = "ep-fixture-host-000000.***";
 const SECRETS = [USER, PASSWORD, "p@ss-secret-9", TOKEN, "neon.tech", "c-6", "us-east-2", "aws", "neondb"];
 
 function fakeClient(opts: { applied?: AppliedMigration[]; hasJournal?: boolean; fail?: unknown; hang?: boolean }) {
@@ -225,7 +225,7 @@ describe("drift: a migration applied from a different version of its file", () =
 
 describe("unreadable: reason codes, exit 2, never the driver's text", () => {
   const cases: [string, unknown, string][] = [
-    ["permission denied for schema drizzle", Object.assign(new Error(`permission denied for schema drizzle (${USER}@ep-dark-cake-b4i1tg5a.c-6.us-east-2.aws.neon.tech)`), { code: "42501" }), "permission_denied"],
+    ["permission denied for schema drizzle", Object.assign(new Error(`permission denied for schema drizzle (${USER}@ep-fixture-host-000000.c-6.us-east-2.aws.neon.tech)`), { code: "42501" }), "permission_denied"],
     ["bad password", Object.assign(new Error(`password authentication failed for user "${USER}"`), { code: "28P01" }), "login_failed"],
     ["connection refused", Object.assign(new Error("connect ECONNREFUSED 10.0.0.1:443"), { code: "ECONNREFUSED" }), "cannot_connect"],
     ["websocket", new Error("WebSocket connection failed"), "cannot_connect"],
@@ -262,8 +262,8 @@ describe("masking and the host check", () => {
   });
 
   it("a pooled Neon host is accepted (this is read-only) and keeps its own label", () => {
-    const r = checkNeonUrl("postgresql://u:p@ep-dark-cake-b4i1tg5a-pooler.c-6.us-east-2.aws.neon.tech/db");
-    expect(r).toEqual({ ok: true, endpoint: "ep-dark-cake-b4i1tg5a-pooler.***" });
+    const r = checkNeonUrl("postgresql://u:p@ep-fixture-host-000000-pooler.c-6.us-east-2.aws.neon.tech/db");
+    expect(r).toEqual({ ok: true, endpoint: "ep-fixture-host-000000-pooler.***" });
   });
 
   const refused: [string, string | undefined, string][] = [
