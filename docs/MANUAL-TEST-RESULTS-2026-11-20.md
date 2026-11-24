@@ -27,6 +27,7 @@ Environment: main checkout at `1530f20` (after #111), Next 16.4.6, `INFERENCE_MO
 | M2, M3, M4, K1, K2, K3, K5 | Pass | Sam, by hand: clients and report pages, admin invitations and users at 375 px; the unsaved-text dialog by keyboard (Go back and save focus, Esc, Download anyway); tab order on a report; invite form keeps the typed text |
 | A1.6 (a to d) | Pass | Sam, 2026-11-24: trusted device skips the code step on the next sign-in in the same browser, a private window still asks for the code, a wrong password is still refused |
 | E1, E2, E3 | Pass | Sam, 2026-11-24, as owner of a second practice ("Test Practice B" on `dev`, synthetic): `/clients` and `/admin/users` hold only that practice; a practice-1 report or client address gives the 404 page; the API answers `{"error":{"code":"not_found","message":"Not found."}}` for practice-1 report and client ids, identical to a made-up id. Left on `dev`: practice B and its owner (synthetic) |
+| D2 | Pass | Sam, 2026-11-24: Safari session signed in at 12:49 and left untouched (Chrome used meanwhile); the first click after 2:55 pm sent the browser to `/login` with no client data shown; signing in again worked |
 
 ## UX findings
 

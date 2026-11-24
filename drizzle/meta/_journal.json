@@ -127,6 +127,13 @@
       "when": 1794674024207,
       "tag": "0017_report_status_regenerate",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1795544461618,
+      "tag": "0018_invitation_link_usable",
+      "breakpoints": true
     }
   ]
 }
