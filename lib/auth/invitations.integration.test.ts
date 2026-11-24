@@ -848,4 +848,119 @@ describe.skipIf(!ENABLED)("invitations through the real stack", () => {
       expect((await invite(ownerA, { email: fresh("limit-other") })).status).toBe(201);
     });
   });
+
+  // Migration 0018: the accept page's "is this link still usable?" question, answered without spending it.
+  describe("is the link still usable (invitation_link_usable, migration 0018)", () => {
+    let orgG: string;
+    let ownerG: Person;
+    const usable = async (hash: unknown) => (await h.asRole("auth", "select invitation_link_usable($1) as r", [hash])).rows[0].r;
+    /** A pending invitation row written by the table owner, so any state can be set directly. */
+    const plant = async (o: { orgId?: string; invitedBy?: string; email?: string; closed?: "accepted" | "revoked"; expiresAt?: Date } = {}) => {
+      const { token, hash } = (await import("./invitation-token")).newInvitationToken();
+      const email = o.email ?? fresh("usable");
+      const [row] = await h.owner
+        .insert(schema.invitations)
+        .values({
+          organizationId: o.orgId ?? orgG,
+          email,
+          tokenHash: hash,
+          invitedBy: o.invitedBy ?? ownerG.userId,
+          expiresAt: o.expiresAt ?? new Date(Date.now() + 3600_000),
+          acceptedAt: o.closed === "accepted" ? new Date() : null,
+          revokedAt: o.closed === "revoked" ? new Date() : null,
+        })
+        .returning();
+      return { id: row.id, email, token, hash };
+    };
+
+    beforeAll(async () => {
+      orgG = await h.seedOrg("invite-G");
+      ownerG = await h.makePerson(orgG, "owner-g", "owner");
+    }, 120_000);
+
+    it("auth_runtime can execute it, app_runtime cannot, it is STABLE and SECURITY DEFINER, and PUBLIC has no execute", async () => {
+      const code = async (run: Promise<unknown>) => {
+        try {
+          await run;
+        } catch (e) {
+          return (e as { code?: string }).code;
+        }
+        return "no error";
+      };
+      const fixture = await plant();
+      expect(await usable(fixture.hash)).toBe(true);
+      expect(await code(h.asRole("app", "select invitation_link_usable($1)", [fixture.hash]))).toBe("42501");
+      const meta = (await h.owner.execute(sql`select provolatile, prosecdef, proconfig, proacl::text as acl from pg_proc where proname = 'invitation_link_usable'`)).rows[0] as {
+        provolatile: string; prosecdef: boolean; proconfig: string[]; acl: string;
+      };
+      expect(meta.provolatile).toBe("s");
+      expect(meta.prosecdef).toBe(true);
+      expect(meta.proconfig).toContain("search_path=public, pg_temp");
+      // Only the owner and the auth login group hold execute: no "=X/..." entry, which would be PUBLIC.
+      expect(meta.acl).not.toMatch(/(^|,|\{)=X\//);
+      expect(meta.acl).toMatch(/auth_runtime/);
+      expect(meta.acl).not.toMatch(/app_runtime/);
+    });
+
+    it("true for a fresh invitation", async () => {
+      expect(await usable((await plant()).hash)).toBe(true);
+    });
+
+    it("false for accepted, revoked and expired invitations", async () => {
+      expect(await usable((await plant({ closed: "accepted" })).hash)).toBe(false);
+      expect(await usable((await plant({ closed: "revoked" })).hash)).toBe(false);
+      expect(await usable((await plant({ expiresAt: new Date(Date.now() - 1000) })).hash)).toBe(false);
+    });
+
+    it("false for the old link after a re-send (the real route), true for the new one", async () => {
+      const first = await plant();
+      expect(await usable(first.hash)).toBe(true);
+      await justSignedIn(ownerG);
+      printed = [];
+      const r = await resend(ownerG, first.id);
+      expect(r.status).toBe(200);
+      const newHash = hashInvitationToken(tokenFor(first.email));
+      expect(newHash).not.toBe(first.hash);
+      expect(await usable(first.hash)).toBe(false);
+      expect(await usable(newHash)).toBe(true);
+    });
+
+    it("false when the practice is deleted, and when the address already has an account (in any practice)", async () => {
+      const orgH = await h.seedOrg("invite-H");
+      const inviter = await h.seedUser(orgH, "owner-h", "owner");
+      const inDeleted = await plant({ orgId: orgH, invitedBy: inviter.userId });
+      expect(await usable(inDeleted.hash)).toBe(true);
+      await h.owner.update(schema.organizations).set({ deletedAt: new Date() }).where(eq(schema.organizations.id, orgH));
+      expect(await usable(inDeleted.hash)).toBe(false);
+
+      const taken = await plant();
+      expect(await usable(taken.hash)).toBe(true);
+      await h.owner.insert(schema.users).values({ organizationId: orgB, email: taken.email, displayName: "Synthetic Earlier", role: "associate", emailVerified: true });
+      expect(await usable(taken.hash)).toBe(false);
+    });
+
+    it("false for a random hash, a malformed hash and NULL; a bare boolean in every case", async () => {
+      const { hash: unknownHash } = (await import("./invitation-token")).newInvitationToken();
+      const fixture = await plant();
+      for (const bad of [unknownHash, "0".repeat(64), "not-hex", "", fixture.hash.toUpperCase(), fixture.hash + "0", fixture.hash.slice(1), null]) {
+        const res = await h.asRole("auth", "select invitation_link_usable($1) as r", [bad]);
+        expect(res.rows).toHaveLength(1);
+        expect(Object.keys(res.rows[0])).toEqual(["r"]);
+        expect(res.rows[0].r, String(bad)).toBe(false);
+      }
+    });
+
+    it("calling it changes no invitation row and writes no audit row, for usable and unusable links alike", async () => {
+      const live = await plant();
+      const spent = await plant({ closed: "accepted" });
+      const snapshot = async () => ({
+        invitations: JSON.stringify(await h.owner.select().from(schema.invitations).where(eq(schema.invitations.organizationId, orgG)).orderBy(schema.invitations.id)),
+        audit: (await h.owner.select().from(schema.auditLog).where(eq(schema.auditLog.organizationId, orgG))).length,
+      });
+      const before = await snapshot();
+      for (const hash of [live.hash, spent.hash, live.hash, "x"]) await usable(hash);
+      expect(await snapshot()).toEqual(before);
+      expect(await usable(live.hash)).toBe(true); // asking did not spend it
+    });
+  });
 });
