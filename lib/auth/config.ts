@@ -70,6 +70,10 @@ export const RATE_LIMITS = {
   signIn: { window: 15 * 60, max: 10 },
   requestPasswordReset: { window: 15 * 60, max: 3 },
   resetPassword: { window: 15 * 60, max: 5 },
+  // GET /api/auth/reset-password/{token}, the emailed link. Counted per client address ONLY (our own check in
+  // lib/auth/reset-link-limit.ts, before Better Auth): Better Auth keys on address plus path and the token is in
+  // the path, so its own counter gave every guessed token a fresh allowance (finding F5, 2026-11-24).
+  resetLink: { window: 15 * 60, max: 5 },
   sendVerificationEmail: { window: 15 * 60, max: 3 },
   verifyEmail: { window: 15 * 60, max: 10 },
   changePassword: { window: 15 * 60, max: 5 },
@@ -78,6 +82,11 @@ export const RATE_LIMITS = {
   // POST /api/invitations/accept (our own route, not Better Auth's): per client address, every request counts,
   // never per token or per account.
   acceptInvitation: { window: 15 * 60, max: 10 },
+  // The accept-invitation PAGE's read-only "is this link usable" check (a server component, no route): per client
+  // address, well-formed tokens only, its own bucket so reloads do not use up the submit allowance. When it is
+  // exceeded the page falls back to showing the form (the submit route decides), which answers the same for every
+  // token, so being limited tells nobody anything.
+  checkInvitation: { window: 15 * 60, max: 30 },
 } as const;
 
 /**
