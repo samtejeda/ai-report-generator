@@ -205,3 +205,26 @@ These cannot be done by hand: P4.7, P4.8, P5.3, P6.6, P7.14. Use Postman's colle
 **Run 2026-11-24 (supervising session, signed-out rows by `curl`, signed-in rows by `fetch` inside a browser the owner signed into; the cookie never left the browser).** Findings: **F1** intro of this file says an unsigned POST without Origin is 403; it is 401 when there is no session cookie (proxy first), 403 when a cookie is present. **F2** P4.5 answers `inference_not_configured` before the section check. **F3** P7.2 and P8.3 need a sign-in older than the window; not exercised. **F4** dev CSP is permissive; verify in production. Cleanup done: endpoint cleared, test invitations revoked, `PP-test-` clients soft-deleted; one pending invitation (`associate-test@example.com`) from the earlier click-through remains.
 **F5** (P9.9, found 2026-11-24): the 5-per-15 limit on the emailed reset link does not bound guessing, because the key includes the token. Reset tokens are long and random, so the real risk is low, but the documented control is not doing what API.md says. Candidate fix (auth-access-builder, plan first): count `/api/auth/reset-password/*` by address only, in the auth route handler, like the invitation checks.
 **F5 CLOSED (fixed in #125, merged 2026-11-24; live re-test the same day on the dev server: seven different garbage tokens gave five 302s, then 429 with `x-retry-after: 900`):** the route now counts `GET /api/auth/reset-password/{token}` per client address only, before Better Auth sees it. Re-test: 6 different garbage tokens from one address, the 6th is 429 with `X-Retry-After`; the bad-token answer (302 to `?error=INVALID_TOKEN`) is unchanged for the first five.
+
+**Audit reads, 2026-11-24 (supervising session, read-only, through the app's own connection inside the practice's row-level security; only action counts and the SET OF METADATA KEYS were printed, never values; 91 rows for practice 1 on that day).**
+
+| Row | Result | What the rows showed |
+|---|---|---|
+| P5.4 | Pass | No audit row of any state-check kind exists (only `report.viewed` from page opens); the 120+ state calls left none, as decided on 2026-10-30 |
+| P6.7 | Pass | 20 `report.exported` rows (one per successful export of the run), metadata keys exactly `format` and `role`; no content, no file name, no client text; the 429s wrote nothing |
+| P7.17 | Pass (partly) | `invitation.created` 3, `invitation.resent` 1, `invitation.revoked` 2, metadata key `role` only: no token, hash or address. Not exercised: `invitation.refused` with reason `address_in_use` (P7.5 was not run); accept attempts with unknown tokens write no row by design (no practice) |
+| P8.7 | Pass | 13 `org.inference_endpoint_set` rows, metadata key `reason` only (set or cleared); the count equals the 1 set by mistake + 1 clear + 5 sets and 5 clears + the final clear; never the address; the 400 cases wrote none |
+| P9.10 | Pass | `auth.login_failed` rows carry `ip` and `reason` only and exist only for known users (a made-up address left none); `auth.mfa_failed` the same; no password, token or code anywhere |
+| Leak scan | Pass | No email-like, token-like, endpoint or secret-named value in any metadata of the day |
+
+Not read: practice B's rows (P10 wrote nothing there beyond two revoked invitations).
+
+**P9.6 to P9.8, 2026-11-24 (supervising session, owner B of Test Practice B as the throwaway account; Sam typed the password into an isolated browser and stopped at the code step, I sent the codes from that window).**
+
+| Row | Result | What happened |
+|---|---|---|
+| P9.6 | Pass | Five wrong authenticator codes each gave 401 `INVALID_CODE`; the sixth call answered 429 "Too many failed verification attempts. Your account is temporarily locked." and no session existed afterwards (`/api/me` 401). The lock is per account: owner A and the other owner-B window were not affected |
+| P9.7 | Pass (partly) | After the lock, a wrong backup code was refused with the same 429, so the backup route shares the lockout. A spent (valid-but-used) backup code was not tried: owner B's codes were not at hand |
+| P9.8 | Pass (partly) | `generate-backup-codes` with a wrong password: 400 `INVALID_PASSWORD`, no codes in the body. "The old codes still work" was not checked (no codes at hand) |
+
+Owner B's code step stays locked for 15 minutes from the run; nothing else about the account changed.
