@@ -265,7 +265,7 @@ Stub mode is the dev default (`INFERENCE_MODE=stub`): no notes box, "test text" 
 
 ## Results
 
-First run (owner only, 2026-10-28 to 2026-10-30): see [MANUAL-TEST-RESULTS-2026-10-28.md](MANUAL-TEST-RESULTS-2026-10-28.md). The table below is for the next run; fill it in then.
+First run (owner only, 2026-10-28 to 2026-10-30): see [MANUAL-TEST-RESULTS-2026-10-28.md](MANUAL-TEST-RESULTS-2026-10-28.md). Second run, in progress: see [MANUAL-TEST-RESULTS-2026-11-20.md](MANUAL-TEST-RESULTS-2026-11-20.md). The table below is for the next run; fill it in then.
 
 | Step | Pass / Fail / Skip | What happened (Fail only) |
 |---|---|---|
