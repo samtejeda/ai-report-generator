@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 import * as schema from "@/lib/db/schema";
+import { FRESH_PASSWORD_SECONDS } from "./config";
 import { hashInvitationToken, INVITATION_TOKEN_PATTERN } from "./invitation-token";
 import { BASE, ENABLED, GOOD_PASSWORD, startHarness, type Handler, type Person } from "./integration-harness";
 
@@ -175,11 +176,11 @@ describe.skipIf(!ENABLED)("invitations through the real stack", () => {
       expect(await h.owner.select().from(schema.invitations).where(eq(schema.invitations.email, email))).toHaveLength(0);
     });
 
-    it("creating needs a sign-in from the last 5 minutes (403 reauth_required, audited); listing, revoking and resending do not", async () => {
+    it("creating needs a sign-in from the last 30 minutes (403 reauth_required, audited); listing, revoking and resending do not", async () => {
       await justSignedIn(ownerA);
       const first = await invite(ownerA, { email: fresh("fresh-gate") });
       const id = (first.json.data as { id: string }).id;
-      await h.signedInAgo(ownerA2, 600);
+      await h.signedInAgo(ownerA2, FRESH_PASSWORD_SECONDS + 60);
       const email = fresh("stale");
       const seen = await seenDenied();
       const r = await invite(ownerA2, { email });
