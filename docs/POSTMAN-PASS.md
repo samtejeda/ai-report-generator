@@ -218,3 +218,13 @@ These cannot be done by hand: P4.7, P4.8, P5.3, P6.6, P7.14. Use Postman's colle
 | Leak scan | Pass | No email-like, token-like, endpoint or secret-named value in any metadata of the day |
 
 Not read: practice B's rows (P10 wrote nothing there beyond two revoked invitations).
+
+**P9.6 to P9.8, 2026-11-24 (supervising session, owner B of Test Practice B as the throwaway account; Sam typed the password into an isolated browser and stopped at the code step, I sent the codes from that window).**
+
+| Row | Result | What happened |
+|---|---|---|
+| P9.6 | Pass | Five wrong authenticator codes each gave 401 `INVALID_CODE`; the sixth call answered 429 "Too many failed verification attempts. Your account is temporarily locked." and no session existed afterwards (`/api/me` 401). The lock is per account: owner A and the other owner-B window were not affected |
+| P9.7 | Pass (partly) | After the lock, a wrong backup code was refused with the same 429, so the backup route shares the lockout. A spent (valid-but-used) backup code was not tried: owner B's codes were not at hand |
+| P9.8 | Pass (partly) | `generate-backup-codes` with a wrong password: 400 `INVALID_PASSWORD`, no codes in the body. "The old codes still work" was not checked (no codes at hand) |
+
+Owner B's code step stays locked for 15 minutes from the run; nothing else about the account changed.
