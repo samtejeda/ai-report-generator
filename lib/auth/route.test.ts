@@ -1,5 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GET, POST } from "@/app/api/auth/[...all]/route";
+
+// The route's two collaborators, replaced: the address limit on the reset link (tested in
+// reset-link-limit.test.ts, and for real in auth.integration.test.ts) and Better Auth itself.
+const mocks = vi.hoisted(() => ({ limitResetLink: vi.fn(), authHandler: vi.fn() }));
+vi.mock("@/lib/auth/reset-link-guard", () => ({ limitResetLink: mocks.limitResetLink }));
+vi.mock("@/lib/auth/server", () => ({ getAuth: () => ({ handler: mocks.authHandler }) }));
+
+beforeEach(() => {
+  mocks.limitResetLink.mockReset().mockResolvedValue(null);
+  mocks.authHandler.mockReset().mockResolvedValue(new Response("from better auth", { status: 200 }));
+});
 
 // Requests outside the allow-list are answered before Better Auth (and so before any
 // environment or database) is touched.
@@ -22,6 +33,25 @@ describe("/api/auth route", () => {
     const res = await call(method, path);
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: { code: "not_found", message: "Not found" } });
+  });
+
+  it("hands an allowed request to the reset-link address limit first, and a refusal never reaches Better Auth", async () => {
+    mocks.limitResetLink.mockResolvedValueOnce(new Response("{}", { status: 429 }));
+    const refused = await call("GET", "/reset-password/some-token");
+    expect(refused.status).toBe(429);
+    expect(mocks.limitResetLink).toHaveBeenCalledTimes(1);
+    expect(mocks.limitResetLink.mock.calls[0][1]).toBe("/reset-password/some-token");
+    expect(mocks.authHandler).not.toHaveBeenCalled();
+
+    const allowed = await call("GET", "/reset-password/another-token");
+    expect(allowed.status).toBe(200);
+    expect(mocks.authHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers 404 for a path outside the allow-list without consulting the limit or Better Auth", async () => {
+    expect((await call("GET", "/reset-password/a/b")).status).toBe(404);
+    expect(mocks.limitResetLink).not.toHaveBeenCalled();
+    expect(mocks.authHandler).not.toHaveBeenCalled();
   });
 
   it("exports only GET and POST, so every other method is 405", async () => {
