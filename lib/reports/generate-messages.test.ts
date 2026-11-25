@@ -142,8 +142,8 @@ describe("real mode wording", () => {
     for (const text of [...Object.values(REVIEW_PROMPT), ...Object.values(MISSING_LABEL)]) expect(text).not.toMatch(/_/);
   });
 
-  it('the placeholder spelling matches the pipeline\'s "[Please provide]"', async () => {
+  it('the insufficient-input note does not promise a "[Please provide]" marker (the model does not always write one)', async () => {
     const { PLEASE_PROVIDE } = await import("@/lib/ai/pipeline/schemas");
-    expect(REVIEW_PROMPT.insufficient_input).toContain(PLEASE_PROVIDE);
+    expect(REVIEW_PROMPT.insufficient_input).not.toContain(PLEASE_PROVIDE);
   });
 });
