@@ -92,7 +92,7 @@ export const REVIEW_HEADING = "Review this section";
 
 // Review prompts, from the flags that came with the report read (closed list).
 export const REVIEW_PROMPT: Record<"insufficient_input" | "sensitive_content_detected" | "low_confidence_interpretation", string> = {
-  insufficient_input: 'Some details were missing from the notes. Look for "[Please provide]" in this section and fill those in.',
+  insufficient_input: "Some details were missing from the notes. Check this section and add what is missing.",
   sensitive_content_detected: "The notes may include sensitive content. Review this section carefully.",
   low_confidence_interpretation: "Part of this section may be a weak reading of the notes. Check it against your own judgment.",
 };
