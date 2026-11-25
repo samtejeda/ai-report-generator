@@ -9,6 +9,7 @@ export * from "./client-assignments";
 export * from "./invitations";
 export * from "./templates";
 export * from "./reports";
+export * from "./report-notes";
 export * from "./rag";
 export * from "./audit-log";
 export * from "./read-limit-counters";
