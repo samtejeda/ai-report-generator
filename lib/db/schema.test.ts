@@ -20,7 +20,7 @@ const colNames = (c: ReturnType<typeof getTableConfig>) => c.columns.map((col) =
 const NO_ORG_FK = new Set(["audit_log"]);
 
 describe("schema conventions", () => {
-  it("covers every CLAUDE.md table (plus read_limit_counters, the per-person read counter, and invitations)", () => {
+  it("covers every CLAUDE.md table (plus read_limit_counters, the per-person read counter, invitations and report_notes)", () => {
     expect(configs.map((c) => c.name).sort()).toEqual(
       [
         "audit_log",
@@ -35,6 +35,7 @@ describe("schema conventions", () => {
         "rag_documents",
         "rag_embeddings",
         "read_limit_counters",
+        "report_notes",
         "report_sections",
         "report_templates",
         "report_versions",

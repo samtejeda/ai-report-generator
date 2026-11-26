@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import * as schema from "@/lib/db/schema";
 import { MAX_SECTION_TEXT } from "@/lib/reports/content";
+import type { SessionContext } from "@/lib/auth/session";
+import { deleteReportNotes, readReportNotes, ReportNotesStoreError, saveReportNotes, scrubbed, setNotesExtraction } from "@/lib/db/report-notes";
 import { PLACEHOLDER_CONTENT, seedReportTemplate, TEMPLATE_SLUG, TEMPLATE_STRUCTURE } from "@/scripts/seed-report-template.mjs";
 import { BASE, ENABLED, startHarness, type Handler, type Person } from "./integration-harness";
 
@@ -768,6 +770,183 @@ describe.skipIf(!ENABLED)("report shell through the real stack", () => {
         if (seen.orgId === orgB) for (const id of idsA) expect(seen.text, `${seen.caller} saw ${id}`).not.toContain(id);
         if (seen.orgId === orgA) for (const r of reportsB) expect(seen.text, `${seen.caller} saw ${r.id}`).not.toContain(r.id);
       }
+    });
+  });
+
+  // Session notes kept per report (feat/report-notes; migration 0019): the data functions under the real
+  // roles, row-level security and triggers. No route yet; the routes are the next step.
+  describe("session notes kept per report (data functions)", () => {
+    const ctx = (p: Person, role: SessionContext["role"]): SessionContext => ({ userId: p.userId, organizationId: p.orgId, role, signedInAt: new Date() });
+    const OWNER_A = () => ctx(ownerA, "owner");
+    const ASSOC_A = () => ctx(assocA, "associate");
+    const ASSOC_A2 = () => ctx(assocA2, "associate");
+    const ADMIN_A = () => ctx(adminA, "admin");
+    const OWNER_B = () => ctx(ownerB, "owner");
+    const MARK = () => `ZedNotes${tag()}`;
+    const noteRows = (reportId: string) => h.owner.select().from(schema.reportNotes).where(eq(schema.reportNotes.reportId, reportId));
+    const KEY = "c".repeat(64);
+
+    it("the owner and an assigned associate save, read, replace and delete; the answers to a write carry no text", async () => {
+      const r = await mkReport(orgA, c1.id, ownerA);
+      const first = await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: "Synthetic first notes." });
+      expect(first).toMatchObject({ ok: true, notes: { length: 22, hasExtraction: false } });
+      expect(Object.keys((first as { notes: object }).notes).sort()).toEqual(["hasExtraction", "length", "updatedAt"]);
+      const read = await readReportNotes(ASSOC_A(), r.reportId);
+      expect(read).toMatchObject({ ok: true, notes: { content: "Synthetic first notes.", extraction: null } });
+      expect(await saveReportNotes(ASSOC_A(), { reportId: r.reportId, content: "Synthetic second notes." })).toMatchObject({ ok: true });
+      const rows = await noteRows(r.reportId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].content).toBe("Synthetic second notes.");
+      expect(rows[0].createdByUserId).toBe(ownerA.userId); // the first writer; later saves replace the text only
+      expect(await deleteReportNotes(ASSOC_A(), r.reportId)).toEqual({ ok: true, deleted: true });
+      expect(await deleteReportNotes(ASSOC_A(), r.reportId)).toEqual({ ok: true, deleted: false });
+      expect(await readReportNotes(OWNER_A(), r.reportId)).toEqual({ ok: true, notes: null });
+    });
+
+    it("an associate reaches notes only for an assigned client's report; ending the assignment takes them away; everything else is 'not found'", async () => {
+      const r = await mkReport(orgA, c1.id, ownerA);
+      await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: "Synthetic for c1." });
+      const stranger = ASSOC_A2(); // assigned to c2 only
+      expect(await readReportNotes(stranger, r.reportId)).toEqual({ ok: false, reason: "not_found" });
+      expect(await saveReportNotes(stranger, { reportId: r.reportId, content: "Synthetic intrusion." })).toEqual({ ok: false, reason: "not_found" });
+      expect(await setNotesExtraction(stranger, { reportId: r.reportId, notes: "Synthetic for c1.", extracted: { a: 1 }, key: KEY })).toEqual({ ok: false, reason: "not_found" });
+      expect(await deleteReportNotes(stranger, r.reportId)).toEqual({ ok: false, reason: "not_found" });
+      expect((await noteRows(r.reportId))[0].content).toBe("Synthetic for c1.");
+
+      const client = await seedClient(orgA, `Notes Client ${tag()}`);
+      await assign(client.id, assocA, ownerA);
+      const mine = await mkReport(orgA, client.id, ownerA);
+      expect(await saveReportNotes(ASSOC_A(), { reportId: mine.reportId, content: "Synthetic mine." })).toMatchObject({ ok: true });
+      await h.owner.update(schema.clientAssignments).set({ deletedAt: new Date() }).where(and(eq(schema.clientAssignments.clientId, client.id), eq(schema.clientAssignments.userId, assocA.userId)));
+      expect(await readReportNotes(ASSOC_A(), mine.reportId)).toEqual({ ok: false, reason: "not_found" });
+      expect(await saveReportNotes(ASSOC_A(), { reportId: mine.reportId, content: "Synthetic after." })).toEqual({ ok: false, reason: "not_found" });
+      expect(await readReportNotes(OWNER_A(), mine.reportId)).toMatchObject({ ok: true, notes: { content: "Synthetic mine." } });
+    });
+
+    it("an admin is refused for every function, even for a client the owner granted, and nothing is stored or changed", async () => {
+      const r = await mkReport(orgA, c1.id, ownerA); // c1 is granted to adminA
+      await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: "Synthetic admin cannot see." });
+      const before = await noteRows(r.reportId);
+      const admin = ADMIN_A();
+      await expect(readReportNotes(admin, r.reportId)).rejects.toThrow("not available");
+      await expect(saveReportNotes(admin, { reportId: r.reportId, content: "Synthetic admin write." })).rejects.toThrow("not available");
+      await expect(setNotesExtraction(admin, { reportId: r.reportId, notes: "Synthetic admin cannot see.", extracted: { a: 1 }, key: KEY })).rejects.toThrow("not available");
+      await expect(deleteReportNotes(admin, r.reportId)).rejects.toThrow("not available");
+      const fresh = await mkReport(orgA, c1.id, ownerA);
+      await expect(saveReportNotes(admin, { reportId: fresh.reportId, content: "Synthetic new." })).rejects.toThrow("not available");
+      expect(await noteRows(fresh.reportId)).toHaveLength(0);
+      expect(await noteRows(r.reportId)).toEqual(before);
+    });
+
+    it("practice B cannot read, write or delete practice A's notes: the same 'not found', and A's row is untouched", async () => {
+      const r = await mkReport(orgA, c1.id, ownerA);
+      await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: "Synthetic A only." });
+      await setNotesExtraction(OWNER_A(), { reportId: r.reportId, notes: "Synthetic A only.", extracted: { a: 1 }, key: KEY });
+      const before = await noteRows(r.reportId);
+      for (const who of [OWNER_B(), ctx(assocB, "associate")]) {
+        expect(await readReportNotes(who, r.reportId)).toEqual({ ok: false, reason: "not_found" });
+        expect(await saveReportNotes(who, { reportId: r.reportId, content: "Synthetic hijack." })).toEqual({ ok: false, reason: "not_found" });
+        expect(await setNotesExtraction(who, { reportId: r.reportId, notes: "Synthetic A only.", extracted: { a: 2 }, key: "d".repeat(64) })).toEqual({ ok: false, reason: "not_found" });
+        expect(await deleteReportNotes(who, r.reportId)).toEqual({ ok: false, reason: "not_found" });
+      }
+      expect(await noteRows(r.reportId)).toEqual(before);
+    });
+
+    it("the cap: exactly 20000 characters is stored (even 20000 emoji, each two UTF-16 units); 20001, blank text and a NUL are refused before the database, and nothing is stored", async () => {
+      const r = await mkReport(orgA, c1.id, ownerA);
+      expect(await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: "x".repeat(20000) })).toMatchObject({ ok: true, notes: { length: 20000 } });
+      expect(await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: "\u{1F642}".repeat(20000) })).toMatchObject({ ok: true, notes: { length: 20000 } });
+      expect(await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: "x".repeat(20001) })).toEqual({ ok: false, reason: "too_long" });
+      expect(await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: "   \n " })).toEqual({ ok: false, reason: "blank" });
+      expect(await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: "bad\u0000text" })).toEqual({ ok: false, reason: "invalid_text" });
+      expect((await noteRows(r.reportId))[0].content).toBe("\u{1F642}".repeat(20000));
+      const other = await mkReport(orgA, c1.id, ownerA);
+      expect(await saveReportNotes(OWNER_A(), { reportId: other.reportId, content: "x".repeat(20001) })).toEqual({ ok: false, reason: "too_long" });
+      expect(await noteRows(other.reportId)).toHaveLength(0);
+    });
+
+    it("editing the notes clears the cached extraction; saving the same text keeps it; an extraction made from text that has since changed is refused as stale", async () => {
+      const r = await mkReport(orgA, c1.id, ownerA);
+      await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: "Synthetic v1." });
+      expect(await setNotesExtraction(OWNER_A(), { reportId: r.reportId, notes: "Synthetic v1.", extracted: { observations: ["Synthetic"] }, key: KEY })).toMatchObject({ ok: true, notes: { hasExtraction: true } });
+      expect(await readReportNotes(OWNER_A(), r.reportId)).toMatchObject({ ok: true, notes: { extraction: { extracted: { observations: ["Synthetic"] }, key: KEY } } });
+      expect(await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: "Synthetic v1." })).toMatchObject({ ok: true, notes: { hasExtraction: true } });
+      expect(await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: "Synthetic v2." })).toMatchObject({ ok: true, notes: { hasExtraction: false } });
+      const row = (await noteRows(r.reportId))[0];
+      expect([row.extracted, row.extractedKey]).toEqual([null, null]);
+      // The model was working on v1 while the person edited: the result must not attach to v2.
+      expect(await setNotesExtraction(OWNER_A(), { reportId: r.reportId, notes: "Synthetic v1.", extracted: { a: 1 }, key: KEY })).toEqual({ ok: false, reason: "stale" });
+      expect((await noteRows(r.reportId))[0].extractedKey).toBeNull();
+      // Notes deleted meanwhile: also stale.
+      await deleteReportNotes(OWNER_A(), r.reportId);
+      expect(await setNotesExtraction(OWNER_A(), { reportId: r.reportId, notes: "Synthetic v2.", extracted: { a: 1 }, key: KEY })).toEqual({ ok: false, reason: "stale" });
+    });
+
+    it("an extraction must be a plain JSON object with a 64-hex key, within the size limit; anything else is refused and nothing is stored", async () => {
+      const r = await mkReport(orgA, c1.id, ownerA);
+      await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: "Synthetic shape." });
+      const attempt = (extracted: unknown, key = KEY) => setNotesExtraction(OWNER_A(), { reportId: r.reportId, notes: "Synthetic shape.", extracted, key });
+      for (const bad of [[1], "text", 5, null, undefined]) expect(await attempt(bad), String(bad)).toEqual({ ok: false, reason: "invalid" });
+      expect(await attempt({ a: 1 }, "not-a-key")).toEqual({ ok: false, reason: "invalid" });
+      expect(await attempt({ a: 1 }, KEY.toUpperCase())).toEqual({ ok: false, reason: "invalid" });
+      expect(await attempt({ a: "x".repeat(60000) })).toEqual({ ok: false, reason: "invalid" });
+      expect(await attempt({ a: "bad\u0000text" })).toEqual({ ok: false, reason: "invalid" });
+      expect((await noteRows(r.reportId))[0].extractedKey).toBeNull();
+      expect(await attempt({ a: "x".repeat(40000) })).toMatchObject({ ok: true }); // under the application limit, so the table's CHECK can never fire
+    });
+
+    it("finalizing through the real route deletes the notes; afterwards nothing can save, extract or read them", async () => {
+      const r = await mkReport(orgA, c1.id, ownerA, "generated");
+      await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: "Synthetic to be deleted." });
+      await setNotesExtraction(OWNER_A(), { reportId: r.reportId, notes: "Synthetic to be deleted.", extracted: { a: 1 }, key: KEY });
+      expect((await fin(assocA, r.reportId)).status).toBe(200);
+      expect(await noteRows(r.reportId)).toHaveLength(0);
+      expect(await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: "Synthetic late." })).toEqual({ ok: false, reason: "closed" });
+      expect(await setNotesExtraction(OWNER_A(), { reportId: r.reportId, notes: "Synthetic late.", extracted: { a: 1 }, key: KEY })).toEqual({ ok: false, reason: "closed" });
+      expect(await readReportNotes(OWNER_A(), r.reportId)).toEqual({ ok: true, notes: null });
+      expect(await noteRows(r.reportId)).toHaveLength(0);
+    });
+
+    it("notes text and extraction never reach audit_log, report_versions or llm_metadata, and the data functions write no audit row of their own", async () => {
+      const marker = MARK();
+      const r = await mkReport(orgA, c1.id, ownerA, "generated");
+      const auditCount = async () => (await h.owner.select().from(schema.auditLog).where(eq(schema.auditLog.organizationId, orgA))).length;
+      const before = await auditCount();
+      await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: `Synthetic ${marker} notes.` });
+      await setNotesExtraction(OWNER_A(), { reportId: r.reportId, notes: `Synthetic ${marker} notes.`, extracted: { quote: marker }, key: KEY });
+      await readReportNotes(ASSOC_A(), r.reportId);
+      await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: `Synthetic ${marker} edited.` });
+      expect(await auditCount()).toBe(before);
+      await fin(ownerA, r.reportId);
+      await saveReportNotes(OWNER_A(), { reportId: r.reportId, content: `Synthetic ${marker} late.` });
+      for (const table of [schema.auditLog, schema.reportVersions, schema.reportSections, schema.reports]) {
+        const rows = await h.owner.select().from(table);
+        expect(JSON.stringify(rows).includes(marker), `${String(table)} holds the marker`).toBe(false);
+      }
+    });
+
+    it("a database error leaves as a code-only error: no notes text, no query parameters, no cause", async () => {
+      const marker = MARK();
+      const r = await mkReport(orgA, c1.id, ownerA);
+      // A real failure with the text in its parameters: an author id that is not a user (foreign key).
+      const ghost: SessionContext = { userId: crypto.randomUUID(), organizationId: orgA, role: "owner", signedInAt: new Date() };
+      const error = await saveReportNotes(ghost, { reportId: r.reportId, content: `Synthetic ${marker}` }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(error).toBeInstanceOf(ReportNotesStoreError);
+      const e = error as ReportNotesStoreError;
+      expect(e.code).toBe("23503");
+      expect(e.message).not.toContain(marker);
+      expect(e.cause).toBeUndefined();
+      expect(JSON.stringify(e, Object.getOwnPropertyNames(e))).not.toContain(marker);
+      // And the wrapper itself, whatever the message held.
+      const wrapped = await scrubbed(async () => {
+        throw Object.assign(new Error(`Failed query: insert ... params: ${marker}`), { cause: { code: "23514", detail: marker } });
+      }).catch((x: unknown) => x as ReportNotesStoreError);
+      expect(wrapped.code).toBe("23514");
+      expect(wrapped.message).not.toContain(marker);
+      expect(await noteRows(r.reportId)).toHaveLength(0);
     });
   });
 });

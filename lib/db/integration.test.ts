@@ -115,6 +115,7 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
         { reportId: report.id, sectionId: section.id, versionNumber: 1, editType: "ai_generated", content: { text: "synthetic" } },
         { reportId: report.id, sectionId: section.id, versionNumber: 2, editType: "human_edit", content: { text: "synthetic edit" }, createdByUserId: userId },
       ]);
+      await t.insert(schema.reportNotes, { reportId: report.id, content: "synthetic session notes", createdByUserId: userId });
       await t.insert(schema.clientHistory, { clientId: client.id, entryType: "note", occurredOn: "2026-01-01", summary: "synthetic", createdByUserId: userId });
       await t.insert(schema.clientAssignments, { clientId: client.id, userId, assignedByUserId: userId });
       const [doc] = await t.insert(schema.ragDocuments, { clientId: client.id, sourceType: "client_note", title: "synthetic note" });
@@ -974,6 +975,164 @@ describe.skipIf(!ENABLED)("database integration (Neon test branch)", () => {
         c2.release();
       }
       expect((await row(id)).status).toBe("finalized");
+    });
+  });
+
+  describe("session notes kept per report (feat/report-notes; migration 0019)", () => {
+    // Synthetic text only. A marker string so a leak into another table could be found.
+    async function freshReport(status: "draft" | "generated" | "finalized" = "draft") {
+      const [client] = await owner.insert(schema.clients).values({ organizationId: A.orgId, displayName: "Synthetic notes" }).returning();
+      const [report] = await owner
+        .insert(schema.reports)
+        .values({
+          organizationId: A.orgId, clientId: client.id, templateId: A.templateId, methodologyPromptId: A.promptId, createdByUserId: A.userId,
+          status, finalizedAt: status === "finalized" ? new Date() : null,
+        })
+        .returning();
+      return { reportId: report.id, clientId: client.id };
+    }
+    const KEY = "a".repeat(64);
+    const OTHER_KEY = "b".repeat(64);
+    const addNotes = async (reportId: string, content = "Synthetic session notes.", orgId = A.orgId, userId = A.userId) =>
+      (await owner.insert(schema.reportNotes).values({ organizationId: orgId, reportId, content, createdByUserId: userId }).returning())[0];
+    const notesRows = (reportId: string) => owner.select().from(schema.reportNotes).where(eq(schema.reportNotes.reportId, reportId));
+    const asApp = (stmt: ReturnType<typeof sql>) => asOrg(A.orgId, (tx) => tx.execute(stmt));
+
+    it("is a tenant table: RLS on, the app role may read, insert, delete and update only the text, extraction, key and updated_at, and nothing else", async () => {
+      const r = await freshReport();
+      const n = await addNotes(r.reportId);
+      for (const stmt of [
+        sql`update report_notes set report_id = ${(await freshReport()).reportId} where id = ${n.id}`,
+        sql`update report_notes set created_by_user_id = ${A.userId} where id = ${n.id}`,
+        sql`update report_notes set created_at = now() where id = ${n.id}`,
+        sql`update report_notes set organization_id = ${B.orgId} where id = ${n.id}`,
+        sql`truncate report_notes`,
+      ]) await expectPgError(asApp(stmt), INSUFFICIENT_PRIVILEGE);
+      await asApp(sql`update report_notes set content = 'Synthetic changed.' where id = ${n.id}`);
+      await asApp(sql`delete from report_notes where id = ${n.id}`);
+      expect(await notesRows(r.reportId)).toHaveLength(0);
+      expect((await owner.execute(sql`select relrowsecurity from pg_class where relname = 'report_notes'`)).rows[0]).toEqual({ relrowsecurity: true });
+    });
+
+    it("practice B cannot read, change or delete practice A's notes, nor attach notes to A's report", async () => {
+      const r = await freshReport();
+      const n = await addNotes(r.reportId, "Synthetic A notes.");
+      const seen = await asOrg(B.orgId, (tx) => tx.execute(sql`select id from report_notes`));
+      expect(seen.rows.map((x) => (x as { id: string }).id)).not.toContain(n.id);
+      await asOrg(B.orgId, (tx) => tx.execute(sql`update report_notes set content = 'Synthetic hijack.' where id = ${n.id}`));
+      await asOrg(B.orgId, (tx) => tx.execute(sql`delete from report_notes where id = ${n.id}`));
+      expect((await notesRows(r.reportId))[0].content).toBe("Synthetic A notes.");
+      // B's own organization id with A's report id: the composite foreign key refuses it. A's id under B's session: RLS refuses it.
+      await expectPgError(asOrg(B.orgId, (tx) => tx.execute(sql`insert into report_notes (organization_id, report_id, content, created_by_user_id) values (${B.orgId}, ${r.reportId}, 'x', ${B.userId})`)), FK_VIOLATION);
+      await expectPgError(asOrg(B.orgId, (tx) => tx.execute(sql`insert into report_notes (organization_id, report_id, content, created_by_user_id) values (${A.orgId}, ${r.reportId}, 'x', ${A.userId})`)), INSUFFICIENT_PRIVILEGE);
+      expect(await notesRows(r.reportId)).toHaveLength(1);
+    });
+
+    it("one row per report; the text is capped at 20000 characters; the extraction needs its key, a 64-hex key and a bounded JSON object", async () => {
+      const r = await freshReport();
+      await addNotes(r.reportId, "x".repeat(20000));
+      await expectPgError(addNotes(r.reportId, "y"), UNIQUE_VIOLATION);
+      const r2 = await freshReport();
+      await expectPgError(addNotes(r2.reportId, "x".repeat(20001)), CHECK_VIOLATION);
+      await expectPgError(asApp(sql`update report_notes set content = ${"x".repeat(20001)} where report_id = ${r.reportId}`), CHECK_VIOLATION);
+      const n = await addNotes(r2.reportId, "Synthetic.");
+      await expectPgError(owner.execute(sql`update report_notes set extracted = '{"a":1}'::jsonb where id = ${n.id}`), CHECK_VIOLATION); // no key
+      await expectPgError(owner.execute(sql`update report_notes set extracted_key = ${KEY} where id = ${n.id}`), CHECK_VIOLATION); // no extraction
+      await expectPgError(owner.execute(sql`update report_notes set extracted = '{"a":1}'::jsonb, extracted_key = 'ABC' where id = ${n.id}`), CHECK_VIOLATION);
+      await expectPgError(owner.execute(sql`update report_notes set extracted = '[1]'::jsonb, extracted_key = ${KEY} where id = ${n.id}`), CHECK_VIOLATION);
+      await expectPgError(owner.execute(sql`update report_notes set extracted = jsonb_build_object('a', repeat('x', 100001)), extracted_key = ${KEY} where id = ${n.id}`), CHECK_VIOLATION);
+      await asApp(sql`update report_notes set extracted = '{"a":1}'::jsonb, extracted_key = ${KEY} where id = ${n.id}`);
+    });
+
+    it("changing the text clears the extraction and its key; the same text, or an extraction-only update, keeps them; one statement that changes both stores neither", async () => {
+      const r = await freshReport();
+      const n = await addNotes(r.reportId, "Synthetic first.");
+      await asApp(sql`update report_notes set extracted = '{"a":1}'::jsonb, extracted_key = ${KEY} where id = ${n.id}`);
+      await asApp(sql`update report_notes set content = 'Synthetic first.' where id = ${n.id}`); // same text
+      let row = (await notesRows(r.reportId))[0];
+      expect(row.extractedKey).toBe(KEY);
+      await asApp(sql`update report_notes set extracted = '{"a":2}'::jsonb, extracted_key = ${OTHER_KEY} where id = ${n.id}`);
+      row = (await notesRows(r.reportId))[0];
+      expect(row.extractedKey).toBe(OTHER_KEY);
+      await asApp(sql`update report_notes set content = 'Synthetic second.' where id = ${n.id}`);
+      row = (await notesRows(r.reportId))[0];
+      expect([row.extracted, row.extractedKey]).toEqual([null, null]);
+      await asApp(sql`update report_notes set content = 'Synthetic third.', extracted = '{"a":3}'::jsonb, extracted_key = ${KEY} where id = ${n.id}`);
+      row = (await notesRows(r.reportId))[0];
+      expect([row.content, row.extracted, row.extractedKey]).toEqual(["Synthetic third.", null, null]);
+      expect(row.updatedAt.getTime()).toBeGreaterThan(n.updatedAt.getTime());
+    });
+
+    it("finalizing a report deletes its notes in the same transaction, and a finalized report accepts none (app and owner)", async () => {
+      const r = await freshReport("generated");
+      await addNotes(r.reportId);
+      const inside = await asOrg(A.orgId, async (tx) => {
+        await tx.execute(sql`update reports set status = 'finalized', finalized_at = now() where id = ${r.reportId}`);
+        return (await tx.execute(sql`select count(*)::int as n from report_notes where report_id = ${r.reportId}`)).rows[0] as { n: number };
+      });
+      expect(inside.n).toBe(0);
+      expect(await notesRows(r.reportId)).toHaveLength(0);
+      await expectPgError(addNotes(r.reportId), RESTRICT_VIOLATION);
+      await expectPgError(asApp(sql`insert into report_notes (organization_id, report_id, content, created_by_user_id) values (${A.orgId}, ${r.reportId}, 'x', ${A.userId})`), RESTRICT_VIOLATION);
+    });
+
+    it("a note save and a finalize at the same moment take turns: the finalize waits for the save, then deletes what it wrote", async () => {
+      const r = await freshReport("generated");
+      const c1 = await appPool.connect();
+      const c2 = await appPool.connect();
+      const bind = async (c: typeof c1) => {
+        await c.query("begin");
+        await c.query("select set_config('app.organization_id', $1, true)", [A.orgId]);
+      };
+      try {
+        await bind(c1);
+        await c1.query("insert into report_notes (organization_id, report_id, content, created_by_user_id) values ($1,$2,'Synthetic racing.',$3)", [A.orgId, r.reportId, A.userId]);
+        await bind(c2);
+        await c2.query("set local lock_timeout = '700ms'");
+        let outcome = "succeeded";
+        try {
+          await c2.query("update reports set status = 'finalized', finalized_at = now() where id = $1", [r.reportId]);
+        } catch (e) {
+          outcome = pgCode(e) ?? "failed";
+        }
+        expect(outcome).toBe("55P03"); // the finalize had to wait for the save
+        await c2.query("rollback");
+        await c1.query("commit");
+        await bind(c2);
+        await c2.query("update reports set status = 'finalized', finalized_at = now() where id = $1", [r.reportId]);
+        await c2.query("commit");
+      } finally {
+        await c1.query("rollback").catch(() => {});
+        await c2.query("rollback").catch(() => {});
+        c1.release();
+        c2.release();
+      }
+      expect(await notesRows(r.reportId)).toHaveLength(0);
+    });
+
+    it("soft-deleting a report deletes its notes and a deleted report accepts none; a soft-deleted client keeps its reports' notes until the purge", async () => {
+      const r = await freshReport();
+      await addNotes(r.reportId);
+      await asApp(sql`update reports set deleted_at = now() where id = ${r.reportId}`);
+      expect(await notesRows(r.reportId)).toHaveLength(0);
+      await expectPgError(addNotes(r.reportId), RESTRICT_VIOLATION);
+
+      const kept = await freshReport();
+      await addNotes(kept.reportId);
+      await asApp(sql`update clients set deleted_at = now() where id = ${kept.clientId}`);
+      expect(await notesRows(kept.reportId)).toHaveLength(1);
+    });
+
+    it("purge_client() removes the notes (through the report's cascade) and leaves its return value as it was", async () => {
+      const r = await freshReport();
+      await addNotes(r.reportId, "Synthetic purge me.");
+      const other = await freshReport();
+      await addNotes(other.reportId, "Synthetic keep me.");
+      const result = await tA.purgeClient(r.clientId);
+      expect(result.reports).toBe(1);
+      expect(Object.keys(result)).not.toContain("report_notes");
+      expect(await notesRows(r.reportId)).toHaveLength(0);
+      expect(await notesRows(other.reportId)).toHaveLength(1);
     });
   });
 
