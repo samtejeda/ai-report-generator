@@ -1,6 +1,6 @@
 import { headers } from "next/headers";
 import { getAuthDb } from "@/lib/db/auth-db";
-import { clientIp } from "./auth";
+import { clientIp } from "./client-ip";
 import { RATE_LIMITS } from "./config";
 import { consumeAddressLimit } from "./invitation-accept";
 import { callInvitationLinkUsable, tokenForForm, type LinkCheckDeps } from "./invitation-link";

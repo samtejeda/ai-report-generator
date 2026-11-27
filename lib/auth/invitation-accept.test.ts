@@ -67,6 +67,13 @@ describe("POST /api/invitations/accept (order of checks, with injected dependenc
     expect(none).toHaveBeenCalledWith("no-trusted-ip");
   });
 
+  it("counts the address our proxy appended, not a forged first entry (rotating it does not escape the limit)", async () => {
+    const limit = vi.fn<AcceptDeps["limit"]>(async () => ({ allowed: true as const }));
+    const { handler } = setup("accepted", { limit });
+    for (const forged of ["1.1.1.1", "2.2.2.2", "3.3.3.3"]) await handler(req(valid(), { ip: `${forged}, 203.0.113.5` }));
+    expect(limit.mock.calls.map((c) => c[0])).toEqual(["203.0.113.5", "203.0.113.5", "203.0.113.5"]);
+  });
+
   it.each([
     ["no body", undefined, "{not json"],
     ["a role", { ...valid(), role: "admin" }, undefined],

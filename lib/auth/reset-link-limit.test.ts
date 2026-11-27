@@ -75,6 +75,11 @@ describe("the key", () => {
     expect(resetLinkLimitKey(new Headers({ "x-forwarded-for": "not an address" }))).toBe(`no-trusted-ip|${RESET_LINK_LIMIT_PATH}`);
   });
 
+  it("counts the address our proxy appended, so a forged first entry cannot give each request a fresh allowance", () => {
+    const keys = ["1.1.1.1", "2.2.2.2", "3.3.3.3"].map((forged) => resetLinkLimitKey(new Headers({ "x-forwarded-for": `${forged}, 203.0.113.5` })));
+    expect(new Set(keys)).toEqual(new Set([`203.0.113.5|${RESET_LINK_LIMIT_PATH}`]));
+  });
+
   it("uses the same 5 per 15 minutes as the documented limit", () => {
     expect(RATE_LIMITS.resetLink).toEqual({ window: 15 * 60, max: 5 });
     expect(RATE_LIMITS.resetLink).toEqual(RATE_LIMITS.resetPassword);

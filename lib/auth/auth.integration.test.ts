@@ -9,6 +9,7 @@ import type { Mail } from "@/lib/email";
 import { addressBucket } from "./address-bucket";
 import { createAuth, type Auth } from "./auth";
 import { resolveSession } from "./session";
+import { withResolvedClientIp } from "./client-ip";
 
 // The catch-all route module reads its Auth from the server module; hand it this file's instance so the
 // rate-limit test can go through the real route (allow-list, response) rather than around it.
@@ -139,12 +140,12 @@ describe.skipIf(!ENABLED)("authentication (Neon test branch)", () => {
     if (o.origin !== null) headers.set("origin", o.origin ?? BASE);
     if (o.cookie) headers.set("cookie", o.cookie);
     return auth.handler(
-      new Request(`${BASE}/api/auth${path}`, {
+      withResolvedClientIp(new Request(`${BASE}/api/auth${path}`, {
         method: o.method ?? (o.body === undefined ? "GET" : "POST"),
         headers,
         body: o.body === undefined ? undefined : JSON.stringify(o.body),
         redirect: "manual",
-      }),
+      })),
     );
   }
 

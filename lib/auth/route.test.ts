@@ -48,6 +48,22 @@ describe("/api/auth route", () => {
     expect(mocks.authHandler).toHaveBeenCalledTimes(1);
   });
 
+  it("shows Better Auth the address our proxy appended in a private header, and drops one the caller sent", async () => {
+    await POST(
+      new Request("http://localhost:3000/api/auth/sign-in/email", {
+        method: "POST",
+        headers: { "x-forwarded-for": "6.6.6.6, 203.0.113.5", "x-resolved-client-ip": "9.9.9.9" },
+      }),
+    );
+    expect(mocks.authHandler).toHaveBeenCalledTimes(1);
+    const seen = mocks.authHandler.mock.calls[0][0] as Request;
+    expect(seen.headers.get("x-resolved-client-ip")).toBe("203.0.113.5");
+
+    mocks.authHandler.mockClear();
+    await POST(new Request("http://localhost:3000/api/auth/sign-in/email", { method: "POST", headers: { "x-resolved-client-ip": "9.9.9.9" } }));
+    expect((mocks.authHandler.mock.calls[0][0] as Request).headers.has("x-resolved-client-ip")).toBe(false);
+  });
+
   it("answers 404 for a path outside the allow-list without consulting the limit or Better Auth", async () => {
     expect((await call("GET", "/reset-password/a/b")).status).toBe(404);
     expect(mocks.limitResetLink).not.toHaveBeenCalled();
