@@ -1,18 +1,21 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useReducer, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth/client";
 import { HOME_PATH } from "@/lib/auth/landing";
+import { AUTHENTICATOR_APP_HELP, KEY_ONLY_INSTRUCTION, SCAN_INSTRUCTION } from "@/lib/auth/mfa-setup-messages";
+import { INITIAL_SETUP, setupReducer } from "@/lib/auth/mfa-setup-state";
 import { captureWait, tooManyAttemptsMessage } from "@/lib/auth/rate-limit-wait";
+import { totpQr } from "@/lib/auth/totp-qr";
 import { resetFormWhenHidden, useResetWhenHidden } from "@/lib/ui/reset-when-hidden";
 import { fieldClass } from "./auth-card";
 import { PasswordField } from "./password-field";
+import { SetupKeyPanel } from "./setup-key-panel";
 
-// Three steps: confirm the password, add the key to an authenticator app and type the first code,
-// then save the backup codes (shown once, here, and never again).
-type Step = "password" | "code" | "codes";
+// Three steps: confirm the password, add the key to an authenticator app (scan the QR code or type
+// the key) and type the first code, then save the backup codes (shown once, here, and never again).
 
 function secretFrom(uri: string): string {
   try {
@@ -24,20 +27,16 @@ function secretFrom(uri: string): string {
 
 export function MfaSetup() {
   const router = useRouter();
-  const [step, setStep] = useState<Step>("password");
+  const [{ step, setupKey, qr, backupCodes }, dispatch] = useReducer(setupReducer, INITIAL_SETUP);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [setupKey, setSetupKey] = useState("");
-  const [backupCodes, setBackupCodes] = useState<string[]>([]);
 
-  // Next keeps this page alive and hidden and restores its state AND its DOM. The setup key and the
-  // backup codes are secrets: they must not sit in a hidden page, so leaving the page drops them
-  // and the setup starts again from the password.
+  // Next keeps this page alive and hidden and restores its state AND its DOM. The setup key, its QR
+  // code and the backup codes are secrets: they must not sit in a hidden page, so leaving the page
+  // drops them and the setup starts again from the password.
   useResetWhenHidden(() => {
-    setStep("password");
+    dispatch({ type: "hidden" });
     setMessage(null);
-    setSetupKey("");
-    setBackupCodes([]);
   });
 
   async function onPassword(event: FormEvent<HTMLFormElement>) {
@@ -52,9 +51,9 @@ export function MfaSetup() {
       setMessage(error?.status === 429 ? tooManyAttemptsMessage(wait.seconds()) : "Could not start setup. Check your password.");
       return;
     }
-    setSetupKey(secretFrom(data.totpURI));
-    setBackupCodes(data.backupCodes);
-    setStep("code");
+    // The QR code is drawn here, in the browser, from the address the server returned; the address
+    // itself is not kept, and nothing is sent anywhere.
+    dispatch({ type: "enabled", setupKey: secretFrom(data.totpURI), qr: totpQr(data.totpURI), backupCodes: data.backupCodes });
   }
 
   async function onCode(event: FormEvent<HTMLFormElement>) {
@@ -70,13 +69,15 @@ export function MfaSetup() {
       setMessage(error.status === 429 ? tooManyAttemptsMessage(wait.seconds()) : "That code is not right. Check the time on your phone and try again.");
       return;
     }
-    setStep("codes");
+    dispatch({ type: "verified" });
   }
 
   if (step === "password") {
     return (
       <form ref={resetFormWhenHidden} onSubmit={onPassword} className="flex flex-col gap-3">
-        <p className="text-sm">Two-step sign-in is required. You will need an authenticator app on your phone. Confirm your password to begin.</p>
+        <p className="text-sm">Two-step sign-in is required. You will need an authenticator app on your phone.</p>
+        <p className="text-sm">{AUTHENTICATOR_APP_HELP}</p>
+        <p className="text-sm">Confirm your password to begin.</p>
         <PasswordField label="Password" name="password" autoComplete="current-password" />
         {message ? (
           <p role="alert" className="text-sm text-red-700">
@@ -93,12 +94,8 @@ export function MfaSetup() {
   if (step === "code") {
     return (
       <form ref={resetFormWhenHidden} onSubmit={onCode} className="flex flex-col gap-3">
-        <p className="text-sm">
-          In your authenticator app, add an account and enter this setup key. Choose &quot;time-based&quot; if asked. Then type the 6-digit code the app shows.
-        </p>
-        <code className="break-all rounded-md border border-zinc-300 p-2 text-sm" data-testid="setup-key">
-          {setupKey}
-        </code>
+        <p className="text-sm">{qr ? SCAN_INSTRUCTION : KEY_ONLY_INSTRUCTION}</p>
+        <SetupKeyPanel qr={qr} setupKey={setupKey} />
         <label className="flex flex-col gap-1 text-sm">
           Code
           <input name="code" type="text" inputMode="numeric" autoComplete="one-time-code" required className={fieldClass} />
@@ -127,8 +124,8 @@ export function MfaSetup() {
       </ul>
       <Button
         onClick={() => {
-          // Drop the codes from the page before leaving.
-          setBackupCodes([]);
+          // Drop the codes (and anything else secret) from the page before leaving.
+          dispatch({ type: "done" });
           router.replace(HOME_PATH);
           router.refresh();
         }}
