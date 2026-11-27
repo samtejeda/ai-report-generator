@@ -1,6 +1,7 @@
 import { Pool } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-serverless";
 import { getEnv } from "@/lib/env";
+import { attachPoolErrorHandler } from "./pool-errors";
 import * as schema from "./schema";
 
 // WebSocket pool on the POOLED connection string: supports the interactive
@@ -9,7 +10,10 @@ import * as schema from "./schema";
 let pool: Pool | undefined;
 
 function getPool(): Pool {
-  pool ??= new Pool({ connectionString: getEnv().DATABASE_URL });
+  if (!pool) {
+    pool = new Pool({ connectionString: getEnv().DATABASE_URL });
+    attachPoolErrorHandler(pool, "app"); // an unhandled idle-client error would crash a long-lived container
+  }
   return pool;
 }
 

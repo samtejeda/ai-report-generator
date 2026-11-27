@@ -38,6 +38,10 @@ Last drilled: 2026-10-13 on the dev project's `test` branch (see Backup drill). 
   - Deleted the scratch branch afterwards. `test`, `dev`, `production` were not modified.
   - Limits: in-place restore of a real branch was not exercised (scratch copy only); the free-plan window is 6 hours, so this proves recoverability, not long-term backup retention. Re-drill on the production Neon project (Scale plan) before Phase C and record it here.
 
+## Database pool errors in a long-lived container (`db_pool_error`)
+
+Both connection pools (the app's and the auth one) log one line, `{"event":"db_pool_error","pool":"app"|"auth","code":"..."}`, when an idle connection fails (Neon restarted or suspended the compute, the network dropped, the server ended the session). Expect it now and then after an idle period or a Neon maintenance restart: it is harmless, the pool drops the dead connection and the next query opens a fresh one, and the process stays up. `code` is a Postgres SQLSTATE (for example `57P01`, "terminating connection due to administrator command"), one of `ECONNRESET`, `ETIMEDOUT`, `EPIPE`, or `unknown`; the line never holds a message, query, parameter or connection string. A burst of them together with failing requests or `/api/health` returning 503 means the database is unreachable: check Neon, then the runtime credentials. Without a handler Node would throw on the unhandled `error` event and could end the process (plausible on a container, unverified; on Vercel the function ended first). Unit-tested; **not yet drilled against a real dropped connection** (to drill: end an idle backend with `pg_terminate_backend` on a scratch Neon branch and confirm the container stays up with one `db_pool_error` line).
+
 ## Database roles and the app login (Neon)
 
 Migration `0003` creates the NOLOGIN group role `app_runtime` with per-table least-privilege grants. The app connects as a **login role that is a member of it**, created with SQL, never in a migration and never in the Neon console (console/API roles are `neon_superuser` members and would bypass the grants; verified on the test branch that a SQL-created member is not):
