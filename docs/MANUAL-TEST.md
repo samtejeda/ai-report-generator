@@ -20,6 +20,7 @@ Mark each step Pass, Fail or Skip in the results table at the end. For a Fail, w
 | G. Invitation screens | Merged (#90, 2026-11-09) | **Can run now.** The builder's short click-through is in B ("Invite an associate by the screens"); G is the fuller list |
 | H. Export button | Merged (#91, 2026-11-09) | **Can run now** (a report with some saved text; the draft case only until C2 works). Not yet clicked through in a browser; the builder's rows D9 to D12 and B18 cover the same ground in short form |
 | I. Generate and Regenerate | Merged (feat/generate-ui) | **I1 to I3 can run now.** I4 to I8 need C2 (a working endpoint, Tailscale). I9 to I18 need real mode (endpoint plus the practice owner's methodology, Phase B) |
+| J. Authenticator enrollment with the QR code | This branch merged (feat/mfa-qr-code); a person with no two-step sign-in yet; a phone with an authenticator app | **Can run once merged.** Not clicked through in a browser; the QR was only checked by decoding the drawing with Apple's CoreImage detector |
 | E. A second practice cannot see the first | A second practice made by `bootstrap-owner.mjs` on `dev` | Optional; a database write on the shared `dev` database, so only with Sam's go-ahead (dry run first, host checked) |
 
 Roles are still covered in CI at the route level (`authz.integration.test.ts`, 31 tests, and the admin and client suites), so part B is about the screens, not about whether access control holds.
@@ -264,6 +265,24 @@ Stub mode is the dev default (`INFERENCE_MODE=stub`): no notes box, "test text" 
 | I17 | (real mode) Two people: one saves a section while the other regenerates it | The second gets the fixed "changed while you were working" sentence, the page refreshes, nothing is overwritten |
 | I18 | All of the above at 375 px and with the keyboard only | Reachable and readable; every dialog is closable with Esc |
 
+## J. Authenticator enrollment with the QR code (feat/mfa-qr-code; not yet clicked through in a browser)
+
+Needs a person who has not set up two-step sign-in yet: an associate the owner has just invited (see B, "Invite an associate by the screens") or a colleague whose authenticator the owner reset (B16). Do not reset your own owner account for this. The wording on this screen is a placeholder until the practice owner's wording arrives. Use a synthetic address and a throwaway password.
+
+| # | Do | Expect |
+|---|---|---|
+| J1 | Sign in as the new person and reach **Set up two-step sign-in**, before typing the password | Plain words say you need an authenticator app on your phone and, if you have none, to install one first (examples: Google Authenticator, Microsoft Authenticator, your password manager's built-in one) |
+| J2 | Confirm the password. On the next screen scan the QR code with an authenticator app on a **phone** (the page open on a computer) | The app offers to add an account named for the practice and the address; the 6-digit code it shows is accepted at "Verify and turn on" and the backup codes appear |
+| J3 | Start again (use **Reset** by the owner, B16) and this time enter **only the setup key** by hand, ignoring the QR code | The app accepts the key (time-based), its code is accepted. Finishing never needs the QR code |
+| J4 | Open the page on the phone that holds the authenticator itself (no second device) | The note about the same phone is visible; the QR code can be skipped; copy or type the key into the app and finish |
+| J5 | Have **no** authenticator app installed and read step 1, then install one and continue | The install hint is on the first screen, before the password; after installing you can carry on from the same screen |
+| J6 | At **375 px** wide (browser dev tools, phone size) on both steps | No sideways scroll; the QR code is about 250 px, fully visible with a white margin all round; the key wraps rather than running off the screen |
+| J7 | Turn the browser or system to dark mode, reopen the code step | The QR code is still dark squares on a white square (it scans); nothing else breaks |
+| J8 | With a screen reader or the keyboard only: Tab through the code step | The QR code is announced as "QR code for your authenticator app" (and not as the key); the key text is readable; Tab goes to the Code box, then the button; you can finish without the QR code |
+| J9 | On the code step, open the page source or Elements panel and search for the setup key | It appears once, as the text of the key box, and in no attribute (no alt, title, aria-label, data attribute or address). Reload: no QR code, no key, back at the password step |
+| J10 | Finish enrollment, press **I have saved them**, then press the browser's Back button | Neither the QR code nor the key nor the backup codes are on the page; nothing was sent to any other site (Network panel shows only this site's requests) |
+| J11 | After the code step, leave the page for another page and come back before verifying | Setup starts again at the password; no QR code or key is left on the hidden page |
+
 ## Results
 
 First run (owner only, 2026-10-28 to 2026-10-30): see [MANUAL-TEST-RESULTS-2026-10-28.md](MANUAL-TEST-RESULTS-2026-10-28.md). Second run, in progress: see [MANUAL-TEST-RESULTS-2026-11-20.md](MANUAL-TEST-RESULTS-2026-11-20.md). The table below is for the next run; fill it in then.
@@ -284,5 +303,6 @@ First run (owner only, 2026-10-28 to 2026-10-30): see [MANUAL-TEST-RESULTS-2026-
 | G1 to G13 | | |
 | H1 to H6 | | |
 | I1 to I18 | | |
+| J1 to J11 | | |
 
 After the run, hand this table to the supervising session. It reads the audit log from the database (read-only) and checks that each action above left the expected `client.*`, `report.*`, `auth.*` and `authz.denied` rows, and none of them contains client text.
