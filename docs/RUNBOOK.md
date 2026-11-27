@@ -65,7 +65,17 @@ Set `AUTH_DATABASE_URL` (pooled host) to that role; the password goes straight i
 - **Deactivate a user:** set `users.deleted_at` and delete their sessions in the same step; the next request from any of their sessions is refused either way (checked on every request), and deactivated users get no reset link.
 - **A user is locked out by the rate limiter:** it expires on its own 15 minutes after the last attempt from that address. To clear it early (owner role): `DELETE FROM auth_rate_limits WHERE key LIKE '%<address>%';`.
 - **Expired sessions and tokens are not purged automatically yet** (Better Auth removes them when they are touched). A scheduled cleanup of `auth_sessions`, `auth_verifications` and `auth_rate_limits` rows past `expires_at` / old `last_request` is a follow-up; none of these hold PHI.
-- **Email:** only the console transport exists, which the environment schema refuses in production. Until a real transport is approved and added, a deployed environment cannot send verification or reset mail; the owner is bootstrapped with a verified address instead.
+- **Email:** two transports exist. `console` prints links to the server log and the environment schema refuses it in production. `disabled` sends nothing and logs only `{"event":"mail_not_sent"}`; it is the only one a deployed environment can use today. A real transport (Resend) is a later, separately approved change. See "Demo deploys with `EMAIL_TRANSPORT=disabled`" below.
+
+### Demo deploys with `EMAIL_TRANSPORT=disabled`
+
+For a public staging or demo deploy with **synthetic data only**. Never use it with real client data: replace it with Resend before Phase C (Pre-launch checklist in `PROGRESS.md`). What works and what does not:
+
+- **Sign-in works.** `requireEmailVerification` is on, and both ways an account is created set `email_verified = true` (checked 2026-11-27): `scripts/bootstrap-owner.mjs` inserts the owner with `email_verified` true, and `accept_invitation()` (migration 0016) inserts the associate with it true, because the link proves the mailbox. So no account of a demo ever waits for a verification mail. TOTP needs no email.
+- **Password reset** returns the same generic answer and writes its audit row (`auth.password_reset_requested`), but no mail is sent, so nobody can finish a reset.
+- **Invitations** are stored, but cannot be accepted: the token exists only in the mail. (Not an option in a demo; create colleagues another way or skip them.)
+- **Notices** (password changed, authenticator reset or set up) are not sent either; each leaves only the `mail_not_sent` line in the log.
+- **A lost authenticator** is recovered with `node scripts/mfa-reset.mjs` (above). A forgotten password has no recovery in a demo besides the database owner setting a new one.
 
 ## Two-step sign-in (MFA, migration 0008)
 
