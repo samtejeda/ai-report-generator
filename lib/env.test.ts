@@ -74,6 +74,26 @@ describe("parseAuthEnv", () => {
     expect(() => parseAuthEnv({ ...auth, NODE_ENV: "production" })).toThrow(/EMAIL_TRANSPORT/);
   });
 
+  it("allows the disabled email transport in production (demo deploys; sends nothing)", () => {
+    const env = parseAuthEnv({ ...auth, NODE_ENV: "production", EMAIL_TRANSPORT: "disabled" });
+    expect(env.EMAIL_TRANSPORT).toBe("disabled");
+  });
+
+  it("still refuses an explicit console transport in production", () => {
+    expect(() => parseAuthEnv({ ...auth, NODE_ENV: "production", EMAIL_TRANSPORT: "console" })).toThrow(/EMAIL_TRANSPORT/);
+  });
+
+  it("rejects an unknown transport without echoing it", () => {
+    let message = "";
+    try {
+      parseAuthEnv({ ...auth, EMAIL_TRANSPORT: "smtp-secret-host" });
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain("EMAIL_TRANSPORT");
+    expect(message).not.toContain("smtp-secret-host");
+  });
+
   it("is independent of the app schema: the app schema neither needs nor exposes auth variables", () => {
     const env = parseEnv({ DATABASE_URL: "postgresql://user:pw@host-pooler.example.com/db", ...auth });
     expect(env).not.toHaveProperty("AUTH_DATABASE_URL");

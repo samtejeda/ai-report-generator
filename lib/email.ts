@@ -4,9 +4,10 @@
  * or a fixed sentence, nothing about clients, reports or the practice's work (Resend's content
  * policy and CLAUDE.md both require this).
  *
- * Only the console transport exists. A real transport (Resend, free tier) is a separate,
- * Sam-approved change; until then a deployed environment cannot send mail, and the env schema
- * refuses the console transport in production so links can never reach deployed logs.
+ * Two transports exist. "console" prints to the server log and the env schema refuses it in
+ * production, so links can never reach deployed logs. "disabled" sends nothing and is the only
+ * one allowed in production: for demo deploys with synthetic data only. A real transport (Resend,
+ * free tier) is a separate, Sam-approved change that must replace "disabled" before Phase C.
  */
 
 export type Mail = { to: string; subject: string; text: string };
@@ -21,6 +22,25 @@ export function createConsoleTransport(options: { production: boolean; write?: (
       write(`[dev email] to=${mail.to} subject=${mail.subject}\n${mail.text}`);
     },
   };
+}
+
+/**
+ * Sends nothing. Writes one fixed line with no field at all (no address, link, token, subject or
+ * template), so nothing the mail carries can reach a log. DEMOS ONLY: with this transport no
+ * person ever receives a reset or invitation link.
+ */
+export function createDisabledTransport(options: { write?: (line: string) => void } = {}): MailTransport {
+  const write = options.write ?? ((line: string) => console.info(line));
+  return {
+    async send() {
+      write(JSON.stringify({ event: "mail_not_sent" }));
+    },
+  };
+}
+
+/** The transport for a configured name. "console" keeps its own refusal in production as a second layer. */
+export function transportFor(name: "console" | "disabled", production: boolean): MailTransport {
+  return name === "disabled" ? createDisabledTransport() : createConsoleTransport({ production });
 }
 
 const FOOTER = "If you did not expect this email, you can ignore it.";
