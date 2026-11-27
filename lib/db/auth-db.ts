@@ -1,6 +1,7 @@
 import { Pool } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-serverless";
 import { getAuthEnv } from "@/lib/env";
+import { attachPoolErrorHandler } from "./pool-errors";
 import * as schema from "./schema";
 
 // The auth_runtime client: credentials, sessions, reset tokens, rate-limit counters and the
@@ -10,7 +11,10 @@ import * as schema from "./schema";
 let pool: Pool | undefined;
 
 function getAuthPool(): Pool {
-  pool ??= new Pool({ connectionString: getAuthEnv().AUTH_DATABASE_URL });
+  if (!pool) {
+    pool = new Pool({ connectionString: getAuthEnv().AUTH_DATABASE_URL });
+    attachPoolErrorHandler(pool, "auth"); // an unhandled idle-client error would crash a long-lived container
+  }
   return pool;
 }
 
