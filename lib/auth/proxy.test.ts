@@ -10,7 +10,7 @@ const passes = (res: Response) => res.headers.get("x-middleware-next") === "1";
 describe("public surface", () => {
   it("lists the pages and endpoints that need no session, each with a reason", () => {
     expect(PUBLIC_PAGES.map((p) => p.path)).toEqual(["/", "/login", "/forgot-password", "/reset-password", "/accept-invitation"]);
-    expect(PUBLIC_API.map((a) => a.path)).toEqual(["/api/health", "/api/invitations/accept", "/api/auth"]);
+    expect(PUBLIC_API.map((a) => a.path)).toEqual(["/api/health", "/api/live", "/api/invitations/accept", "/api/auth"]);
     for (const entry of [...PUBLIC_PAGES, ...PUBLIC_API]) expect(entry.reason.length, entry.path).toBeGreaterThan(20);
   });
 
