@@ -89,12 +89,17 @@ export const RATE_LIMITS = {
   checkInvitation: { window: 15 * 60, max: 30 },
 } as const;
 
+/** The list header proxies append to. Read only by lib/auth/client-ip.ts, which counts from the right (TRUSTED_PROXY_HOPS). */
+export const FORWARDED_FOR_HEADER = "x-forwarded-for";
+
 /**
- * Headers read, in order, for the client address that rate limits and audit events use.
- * Vercel sets x-forwarded-for itself and drops client-supplied values; that is the
- * documented behavior and is UNVERIFIED until the first deploy (see PROGRESS.md).
+ * The private header the auth route sets from the resolved client address (removing any copy the caller
+ * sent) and Better Auth reads, so its own limiter and the session row use the same address as ours.
  */
-export const CLIENT_IP_HEADERS = ["x-forwarded-for"] as const;
+export const RESOLVED_CLIENT_IP_HEADER = "x-resolved-client-ip";
 
 /** Cookie name prefix (Better Auth adds __Secure- on https). */
 export const COOKIE_PREFIX = "rg";
+
+/** Transitional (removed in the next commit): the old header list. */
+export const CLIENT_IP_HEADERS = ["x-forwarded-for"] as const;

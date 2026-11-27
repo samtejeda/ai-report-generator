@@ -5,6 +5,11 @@ const postgresUrl = z
   .min(1)
   .refine((v) => /^postgres(ql)?:\/\//.test(v), "must be a postgres:// URL");
 
+// How many proxies of ours append to x-forwarded-for (an AWS Application Load Balancer is 1; a CDN in front
+// of it makes 2). 0, also the default when unset, means the header is not trusted at all: rate limits then
+// share one bucket and audit rows carry no address. See lib/auth/client-ip.ts.
+const trustedProxyHops = z.coerce.number().int().min(0).max(3).default(0);
+
 // The app's runtime variables, and nothing else. DATABASE_URL_UNPOOLED (owner
 // credential, DDL-capable) is deliberately NOT here: only drizzle.config.ts reads
 // it, so a deployed environment never needs to hold it (checklist 15 item 5).
@@ -34,6 +39,7 @@ const authSchema = z.object({
   // separately approved change) before Phase C. The default stays "console".
   EMAIL_TRANSPORT: z.enum(["console", "disabled"]).default("console"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  TRUSTED_PROXY_HOPS: trustedProxyHops,
 });
 
 export type AuthEnv = z.infer<typeof authSchema>;
@@ -76,4 +82,15 @@ export function getEnv(): Env {
 export function getAuthEnv(): AuthEnv {
   cachedAuth ??= parseAuthEnv(process.env);
   return cachedAuth;
+}
+
+/**
+ * Just the trusted proxy hop count, read on every call (a bare integer, so cheap) and independent of the
+ * rest of the auth variables: the client address is needed by code that must not fail because an unrelated
+ * variable is missing. A bad value throws, naming the variable and never the value.
+ */
+export function getTrustedProxyHops(): number {
+  const result = trustedProxyHops.safeParse(process.env.TRUSTED_PROXY_HOPS);
+  if (!result.success) throw new Error("Invalid environment configuration. TRUSTED_PROXY_HOPS: must be a whole number from 0 to 3");
+  return result.data;
 }
