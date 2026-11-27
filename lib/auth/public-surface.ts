@@ -18,6 +18,7 @@ export const PUBLIC_PAGES: readonly { path: string; reason: string }[] = [
 
 export const PUBLIC_API: readonly { path: string; prefix: boolean; reason: string }[] = [
   { path: "/api/health", prefix: false, reason: "Liveness and database reachability for monitors; no tenant data." },
+  { path: "/api/live", prefix: false, reason: "Process liveness for the load balancer's health check: touches no database, environment or tenant data and returns a fixed body, so it cannot wake Neon." },
   { path: "/api/invitations/accept", prefix: false, reason: "A person with an emailed invitation has no account or session yet; the single-use token is the credential. Own origin only, limited per client address, one answer for every unusable token, and it creates no session (lib/auth/invitation-accept.ts)." },
   { path: "/api/auth", prefix: true, reason: "Sign-in, reset and verification create identity, so they cannot require one. Narrowed to an allow-list in lib/auth/route-policy.ts; each endpoint does its own checks." },
 ];
