@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { Client, Pool } from "@neondatabase/serverless";
 import { drizzle, type NeonDatabase } from "drizzle-orm/neon-serverless";
 import * as schema from "@/lib/db/schema";
+import { withResolvedClientIp } from "./client-ip";
 
 /**
  * Shared plumbing for the integration suites that call the REAL route modules with REAL sessions
@@ -71,7 +72,8 @@ export async function startHarness(options: { appRole: string; authRole: string;
   vi.spyOn(console, "info").mockImplementation(() => {});
 
   const server = await import("./server");
-  const handle = (request: Request) => server.getAuth().handler(request);
+  // Through the same step the auth route takes, so Better Auth sees the resolved client address (lib/auth/client-ip.ts).
+  const handle = (request: Request) => server.getAuth().handler(withResolvedClientIp(request));
   const hashPassword = (await server.getAuth().$context).password.hash;
 
   const runOctets = crypto.getRandomValues(new Uint8Array(2)).join(".");

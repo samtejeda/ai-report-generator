@@ -8,7 +8,6 @@ import type { AuthDb } from "@/lib/db/auth-db";
 import { authAccounts, authRateLimits, authSessions, authTwoFactors, authVerifications, users } from "@/lib/db/schema";
 import { mailTemplates, type MailTransport } from "@/lib/email";
 import {
-  CLIENT_IP_HEADERS,
   COOKIE_PREFIX,
   FRESH_PASSWORD_SECONDS,
   MFA_ISSUER,
@@ -17,12 +16,14 @@ import {
   PASSWORD_MIN_LENGTH,
   RATE_LIMITS,
   RESET_TOKEN_SECONDS,
+  RESOLVED_CLIENT_IP_HEADER,
   SESSION_ABSOLUTE_SECONDS,
   SESSION_IDLE_SECONDS,
   TRUSTED_DEVICE_SECONDS,
   TWO_FACTOR_CHALLENGE_SECONDS,
   VERIFY_EMAIL_SECONDS,
 } from "./config";
+import { clientIp } from "./client-ip";
 
 /**
  * Self-hosted Better Auth (audit 03 item 1): password hashing (scrypt), sessions, email
@@ -60,14 +61,6 @@ export type AuthDeps = {
 };
 
 type UserRow = { id: string; email: string; organizationId: string; deletedAt: Date | null; emailVerified: boolean; twoFactorEnabled: boolean };
-
-export function clientIp(headers: Headers | undefined | null): string | undefined {
-  for (const name of CLIENT_IP_HEADERS) {
-    const first = headers?.get(name)?.split(",")[0]?.trim();
-    if (first && /^[0-9a-fA-F:.]{3,45}$/.test(first)) return first;
-  }
-  return undefined;
-}
 
 /** Operational log line. Never includes an email address, token, or request body. */
 function logEvent(event: string, fields: Record<string, string | number | boolean | undefined> = {}) {
@@ -331,7 +324,7 @@ export function createAuth(deps: AuthDeps) {
       cookiePrefix: COOKIE_PREFIX,
       useSecureCookies: deps.production,
       defaultCookieAttributes: { httpOnly: true, sameSite: "lax", secure: deps.production },
-      ipAddress: { ipAddressHeaders: [...CLIENT_IP_HEADERS] },
+      ipAddress: { ipAddressHeaders: [RESOLVED_CLIENT_IP_HEADER] },
       database: { generateId: "uuid" },
       // Explicit, because Better Auth silently disables both checks when NODE_ENV=test. Off here
       // would mean the cross-site and open-redirect protections are never exercised by tests.

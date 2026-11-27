@@ -100,6 +100,3 @@ export const RESOLVED_CLIENT_IP_HEADER = "x-resolved-client-ip";
 
 /** Cookie name prefix (Better Auth adds __Secure- on https). */
 export const COOKIE_PREFIX = "rg";
-
-/** Transitional (removed in the next commit): the old header list. */
-export const CLIENT_IP_HEADERS = ["x-forwarded-for"] as const;

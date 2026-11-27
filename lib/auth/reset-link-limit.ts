@@ -1,6 +1,6 @@
 import { jsonError } from "@/lib/api/respond";
 import { addressBucket } from "./address-bucket";
-import { clientIp } from "./auth";
+import { clientIp } from "./client-ip";
 import { RESET_LINK_PATTERN } from "./route-policy";
 
 /**

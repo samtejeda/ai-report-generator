@@ -4,6 +4,7 @@ import { createHmac } from "node:crypto";
 import { Pool } from "@neondatabase/serverless";
 import { drizzle, type NeonDatabase } from "drizzle-orm/neon-serverless";
 import * as schema from "@/lib/db/schema";
+import { withResolvedClientIp } from "./client-ip";
 
 // Authorization end to end, through the REAL route modules (app/api/me, app/api/clients,
 // app/api/clients/[id]), the REAL Better Auth instance (sign-in, authenticator code, session
@@ -182,7 +183,7 @@ describe.skipIf(!ENABLED)("authorization through the real routes (Neon test bran
     vi.spyOn(console, "info").mockImplementation(() => {});
 
     const server = await import("./server");
-    handle = (request) => server.getAuth().handler(request);
+    handle = (request) => server.getAuth().handler(withResolvedClientIp(request));
     hashPassword = (await server.getAuth().$context).password.hash;
     clientsGET = (await import("@/app/api/clients/route")).GET as Handler;
     clientGET = (await import("@/app/api/clients/[id]/route")).GET as Handler;

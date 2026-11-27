@@ -1,3 +1,4 @@
+import { withResolvedClientIp } from "@/lib/auth/client-ip";
 import { limitResetLink } from "@/lib/auth/reset-link-guard";
 import { isAllowedAuthRequest } from "@/lib/auth/route-policy";
 import { getAuth } from "@/lib/auth/server";
@@ -15,7 +16,9 @@ async function handle(request: Request): Promise<Response> {
   // once per token; count it per address here, before Better Auth sees it (lib/auth/reset-link-limit.ts).
   const refused = await limitResetLink(request, path);
   if (refused) return refused;
-  return getAuth().handler(request);
+  // Better Auth reads the client address from a private header we set from the trusted hop (lib/auth/client-ip.ts),
+  // never from the caller-controlled x-forwarded-for, so its limiter and our limits count the same address.
+  return getAuth().handler(withResolvedClientIp(request));
 }
 
 export const GET = handle;
