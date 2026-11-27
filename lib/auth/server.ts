@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { audit } from "@/lib/audit";
 import { getAuthDb } from "@/lib/db/auth-db";
-import { createConsoleTransport, type Mail, type MailTransport } from "@/lib/email";
+import { transportFor, type Mail, type MailTransport } from "@/lib/email";
 import { getAuthEnv } from "@/lib/env";
 import { createAuth, type Auth } from "./auth";
 import { resolveSession, type SessionContext } from "./session";
@@ -11,9 +11,12 @@ import { resolveSession, type SessionContext } from "./session";
 let instance: Auth | undefined;
 let transport: MailTransport | undefined;
 
-/** The one mail transport for this server process (console in development; see lib/email.ts). */
+/** The one mail transport for this server process (console in development, disabled for demos; see lib/email.ts). */
 export function getMailTransport(): MailTransport {
-  if (!transport) transport = createConsoleTransport({ production: getAuthEnv().NODE_ENV === "production" });
+  if (!transport) {
+    const env = getAuthEnv();
+    transport = transportFor(env.EMAIL_TRANSPORT, env.NODE_ENV === "production");
+  }
   return transport;
 }
 

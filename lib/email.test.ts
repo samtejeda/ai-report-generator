@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { createConsoleTransport, mailTemplates } from "./email";
+import { describe, expect, it, vi } from "vitest";
+import { createConsoleTransport, createDisabledTransport, mailTemplates, transportFor } from "./email";
 
 describe("mail templates carry no PHI and no names", () => {
   const url = "https://app.example.com/api/auth/reset-password/TOKEN?callbackURL=%2Freset-password";
@@ -59,6 +59,26 @@ describe("console transport", () => {
 
   it("refuses to run in production", async () => {
     await expect(createConsoleTransport({ production: true }).send(mailTemplates.passwordChanged("a@example.com"))).rejects.toThrow(/production/);
+  });
+});
+
+describe("disabled transport (demos only)", () => {
+  it("sends nothing and writes one fixed line with no address, link, token, subject or text", async () => {
+    const lines: string[] = [];
+    const mail = mailTemplates.resetPassword("person@example.org", "https://app.example.com/reset-password/SECRETTOKEN", 60);
+    await createDisabledTransport({ write: (l) => lines.push(l) }).send(mail);
+    expect(lines).toEqual(['{"event":"mail_not_sent"}']);
+    for (const secret of ["person@example.org", "SECRETTOKEN", "https://", mail.subject, "Open this link"]) {
+      expect(lines[0]).not.toContain(secret);
+    }
+  });
+
+  it("works in production, while the console transport still refuses there", async () => {
+    const mail = mailTemplates.passwordChanged("a@example.com");
+    const quiet = vi.spyOn(console, "info").mockImplementation(() => {});
+    await expect(transportFor("disabled", true).send(mail)).resolves.toBeUndefined();
+    quiet.mockRestore();
+    await expect(transportFor("console", true).send(mail)).rejects.toThrow(/production/);
   });
 });
 

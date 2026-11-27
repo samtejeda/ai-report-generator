@@ -28,9 +28,11 @@ const authSchema = z.object({
   BETTER_AUTH_SECRET: z.string().min(32),
   // Public origin of the app, used in emailed links and for the origin check.
   BETTER_AUTH_URL: z.url(),
-  // The console transport prints links to the server log and refuses to run in production.
-  // A real transport (Resend) is a later, separately approved change.
-  EMAIL_TRANSPORT: z.enum(["console"]).default("console"),
+  // "console" prints links to the server log and is refused in production. "disabled" sends
+  // nothing and logs one fixed line (`mail_not_sent`); it is allowed in production for demo
+  // deploys with synthetic data ONLY and must be replaced by a real transport (Resend, a later,
+  // separately approved change) before Phase C. The default stays "console".
+  EMAIL_TRANSPORT: z.enum(["console", "disabled"]).default("console"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 });
 
